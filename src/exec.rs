@@ -1,52 +1,73 @@
-use crate::types::{Config, CrateResult, CrateUnit};
+use crate::types::{Batch, BatchResult, Config};
 use crossbeam_channel::{Receiver, Sender};
+use std::path::PathBuf;
 use std::process::Command;
 
-pub(crate) fn worker(rx: Receiver<CrateUnit>, tx: Sender<CrateResult>, cfg: &Config) {
-    while let Ok(unit) = rx.recv() {
-        let result = format_unit(&unit, cfg);
+pub(crate) fn worker(rx: Receiver<Batch>, tx: Sender<BatchResult>, cfg: &Config) {
+    while let Ok(batch) = rx.recv() {
+        let result = format_batch(&batch, cfg);
         if tx.send(result).is_err() {
             break;
         }
     }
 }
 
-fn format_unit(unit: &CrateUnit, cfg: &Config) -> CrateResult {
+fn format_batch(batch: &Batch, cfg: &Config) -> BatchResult {
+    let sort_key = batch.sort_key();
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(batch.file_count());
+    for unit in &batch.units {
+        for f in &unit.files {
+            files.push((f.clone(), unit.manifest_dir.clone()));
+        }
+    }
+
     let mut cmd = Command::new("rustfmt");
-    cmd.current_dir(&unit.manifest_dir);
-    cmd.arg("--edition").arg(unit.edition.as_str());
+    // cwd doesn't affect rustfmt.toml resolution — rustfmt walks up from
+    // each *file's* path. Pass absolute file paths (we canonicalize in
+    // discover) and any cwd works. Pick the sort_key crate so spawn
+    // diagnostics are at least pointing at one of the batch's crates.
+    cmd.current_dir(&sort_key);
+    cmd.arg("--edition").arg(batch.edition.as_str());
     if cfg.check {
         cmd.arg("--check");
     }
     for arg in &cfg.rustfmt_args {
         cmd.arg(arg);
     }
-    for f in &unit.files {
-        cmd.arg(f);
+    for unit in &batch.units {
+        for f in &unit.files {
+            cmd.arg(f);
+        }
     }
 
     let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => {
+            let crates: Vec<String> = batch
+                .units
+                .iter()
+                .map(|u| u.manifest_dir.display().to_string())
+                .collect();
             let msg = format!(
-                "failed to spawn rustfmt for crate {}: {e}\n",
-                unit.manifest_dir.display()
+                "failed to spawn rustfmt for batch ({} crates: {}): {e}\n",
+                crates.len(),
+                crates.join(", ")
             );
-            return CrateResult {
-                sort_key: unit.manifest_dir.clone(),
+            return BatchResult {
+                sort_key,
                 stdout: Vec::new(),
                 stderr: msg.into_bytes(),
                 exit_code: 2,
-                files: unit.files.clone(),
+                files,
             };
         }
     };
 
-    CrateResult {
-        sort_key: unit.manifest_dir.clone(),
+    BatchResult {
+        sort_key,
         stdout: output.stdout,
         stderr: output.stderr,
         exit_code: output.status.code().unwrap_or(-1),
-        files: unit.files.clone(),
+        files,
     }
 }

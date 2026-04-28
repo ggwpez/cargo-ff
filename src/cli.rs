@@ -36,6 +36,11 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub channel_capacity: Option<usize>,
 
+    /// Crates per rustfmt invocation. Higher amortizes spawn cost; lower
+    /// gives finer scheduling granularity. Hidden — benchmarking knob.
+    #[arg(long, hide = true)]
+    pub batch_size: Option<usize>,
+
     /// Output format.
     #[arg(long, value_enum, default_value_t = MessageFormatArg::Human)]
     pub message_format: MessageFormatArg,
@@ -82,6 +87,7 @@ impl Cli {
             channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
             message_format: self.message_format.into(),
+            batch_size: self.batch_size,
         }
     }
 }

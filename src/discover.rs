@@ -1,3 +1,4 @@
+use crate::size;
 use crate::types::{Config, CrateUnit, Edition, Error, Result, UnknownEdition};
 use cargo_metadata::MetadataCommand;
 use crossbeam_channel::Sender;
@@ -108,10 +109,12 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             continue;
         }
 
+        let size_bytes = size::estimate(&manifest_dir, &entry_points);
         let unit = CrateUnit {
             edition,
             manifest_dir,
             files: entry_points,
+            size_bytes,
         };
         if tx.send(unit).is_err() {
             return Err(Error::SendClosed);

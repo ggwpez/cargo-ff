@@ -50,15 +50,52 @@ pub struct CrateUnit {
     pub edition: Edition,
     pub manifest_dir: PathBuf,
     pub files: Vec<PathBuf>,
+    /// Sum of entry-point file sizes in bytes. A rough proxy for the
+    /// formatting work this crate represents — undercounts by a constant
+    /// factor (rustfmt walks the mod tree from each entry point and
+    /// reads more than just these files), but the *ratios* between
+    /// crates are what matter for batching decisions.
+    pub size_bytes: u64,
+}
+
+/// One rustfmt invocation's worth of work: a homogeneous-edition group of
+/// crates whose entry-point files are passed together to a single rustfmt
+/// process. With batch_size=1 this is equivalent to per-crate dispatch.
+#[derive(Debug, Clone)]
+pub struct Batch {
+    pub edition: Edition,
+    pub units: Vec<CrateUnit>,
+}
+
+impl Batch {
+    pub fn size_bytes(&self) -> u64 {
+        self.units.iter().map(|u| u.size_bytes).sum()
+    }
+
+    pub fn file_count(&self) -> usize {
+        self.units.iter().map(|u| u.files.len()).sum()
+    }
+
+    /// Sort key for deterministic output ordering: lex-min of manifest dirs.
+    pub fn sort_key(&self) -> PathBuf {
+        self.units
+            .iter()
+            .map(|u| u.manifest_dir.clone())
+            .min()
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug)]
-pub struct CrateResult {
+pub struct BatchResult {
     pub sort_key: PathBuf,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: i32,
-    pub files: Vec<PathBuf>,
+    /// All files in the batch, with the manifest_dir they came from.
+    /// Used by the aggregator to attribute `--check` failures back to
+    /// individual crates.
+    pub files: Vec<(PathBuf, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -81,6 +118,11 @@ pub struct Config {
     pub channel_capacity: Option<usize>,
     pub rustfmt_args: Vec<String>,
     pub message_format: MessageFormat,
+    /// Crates per rustfmt invocation. Higher values amortize spawn cost
+    /// (~40ms/invocation on M-series) at the cost of coarser scheduling
+    /// granularity. `None` → pick a default based on workspace size and
+    /// worker count.
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Debug)]
