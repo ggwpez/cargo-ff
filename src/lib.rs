@@ -46,7 +46,12 @@ pub fn run(cfg: &Config) -> Result<Report> {
     let cfg_d = cfg.clone();
     let producer = thread::spawn(move || discover::run(&cfg_d, unit_tx));
 
-    let coalescer = thread::spawn(move || coalesce::run(unit_rx, batch_tx, batch_size, 4));
+    // 1MB threshold ≈ p98 of crate sizes on polkadot-sdk (~10 crates go
+    // solo). Tunable later if needed; this is the round number that
+    // covers the giants without trigger-happily soloing medium crates.
+    let solo_threshold = 1_000_000u64;
+    let coalescer =
+        thread::spawn(move || coalesce::run(unit_rx, batch_tx, batch_size, 4, solo_threshold));
 
     let mut workers = Vec::with_capacity(n);
     for _ in 0..n {

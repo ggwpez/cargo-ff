@@ -29,6 +29,7 @@ pub(crate) fn run(
     tx: Sender<Batch>,
     batch_size: usize,
     pack_multiplier: usize,
+    solo_threshold_bytes: u64,
 ) -> Result<()> {
     let batch_size = batch_size.max(1);
     let pack_multiplier = pack_multiplier.max(1);
@@ -36,6 +37,22 @@ pub(crate) fn run(
     let mut buckets: HashMap<Edition, Vec<CrateUnit>> = HashMap::new();
 
     while let Ok(unit) = rx.recv() {
+        // Big crates ship immediately as their own batch. Two reasons:
+        //   1. Amortizing spawn cost is worthless when a single crate's
+        //      formatting work already dwarfs the ~40ms spawn overhead.
+        //   2. More importantly, a giant crate shipped now lets a worker
+        //      start grinding on it at t≈0, instead of waiting until the
+        //      next window flush. This is "big-first" scheduling for
+        //      free — the rest of the pipeline drains onto other workers
+        //      while the long-pole crate runs in parallel.
+        if unit.size_bytes >= solo_threshold_bytes {
+            let edition = unit.edition;
+            if tx.send(Batch { edition, units: vec![unit] }).is_err() {
+                return Ok(());
+            }
+            continue;
+        }
+
         let bucket = buckets.entry(unit.edition).or_default();
         bucket.push(unit);
         if bucket.len() >= window {
