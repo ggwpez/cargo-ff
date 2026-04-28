@@ -1,10 +1,12 @@
+use crate::dispatch::PriorityQueue;
 use crate::types::{Batch, BatchResult, Config};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
-pub(crate) fn worker(rx: Receiver<Batch>, tx: Sender<BatchResult>, cfg: &Config) {
-    while let Ok(batch) = rx.recv() {
+pub(crate) fn worker(queue: Arc<PriorityQueue>, tx: Sender<BatchResult>, cfg: &Config) {
+    while let Some(batch) = queue.pop() {
         let result = format_batch(&batch, cfg);
         if tx.send(result).is_err() {
             break;

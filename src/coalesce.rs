@@ -1,32 +1,35 @@
+use crate::dispatch::PriorityQueue;
 use crate::types::{Batch, CrateUnit, Edition, Result};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::Arc;
 
 /// Group `CrateUnit`s by edition and emit `Batch`es packed by LPT
 /// (Longest Processing Time first) bin-packing within a sliding window.
+///
+/// **Solo dispatch.** A unit at or above `solo_threshold_bytes` ships
+/// immediately as its own batch. Two reasons: amortizing spawn cost
+/// (~40ms) is moot when one crate's formatting work already dwarfs it,
+/// and shipping the giant on arrival lets a worker start on it from
+/// roughly t=0 instead of waiting until the next window flush. The
+/// downstream priority queue then ensures the giant is picked up before
+/// any smaller packed batch even when other batches arrive earlier.
 ///
 /// **Window.** Each per-edition bucket flushes once it accumulates
 /// `batch_size * pack_multiplier` units. Within that window we run a
 /// proper LPT pass: sort DESC by `size_bytes`, assign each unit to the
 /// bin with smallest current total. This buys most of LPT's
 /// makespan-balancing without buffering the entire workspace before
-/// emitting anything — the first batches ship after one window fills
-/// (~`window` units of producer work), not after the producer closes.
+/// emitting anything — first batches ship after one window fills, not
+/// after the producer closes.
 ///
 /// **Why per-edition.** rustfmt is invoked with one `--edition` flag per
 /// process; mixing editions is a parse-correctness issue (a 2021 crate
 /// using `let gen = 5;` fails under `--edition 2024`).
-///
-/// **Multiplier tradeoff.** Larger `M` = better balance within a window
-/// (LPT shines when there are many jobs to pack) but later first
-/// emission. M=1 degenerates to a single bin per window, defeating the
-/// point. M=4 is a sensible default: 4 bins per window means LPT
-/// actually has room to balance, while a window of `4 * batch_size`
-/// crates fills quickly enough that workers don't sit idle long.
 pub(crate) fn run(
     rx: Receiver<CrateUnit>,
-    tx: Sender<Batch>,
+    queue: Arc<PriorityQueue>,
     batch_size: usize,
     pack_multiplier: usize,
     solo_threshold_bytes: u64,
@@ -37,47 +40,34 @@ pub(crate) fn run(
     let mut buckets: HashMap<Edition, Vec<CrateUnit>> = HashMap::new();
 
     while let Ok(unit) = rx.recv() {
-        // Big crates ship immediately as their own batch. Two reasons:
-        //   1. Amortizing spawn cost is worthless when a single crate's
-        //      formatting work already dwarfs the ~40ms spawn overhead.
-        //   2. More importantly, a giant crate shipped now lets a worker
-        //      start grinding on it at t≈0, instead of waiting until the
-        //      next window flush. This is "big-first" scheduling for
-        //      free — the rest of the pipeline drains onto other workers
-        //      while the long-pole crate runs in parallel.
         if unit.size_bytes >= solo_threshold_bytes {
             let edition = unit.edition;
-            if tx.send(Batch { edition, units: vec![unit] }).is_err() {
-                return Ok(());
-            }
+            queue.push(Batch {
+                edition,
+                units: vec![unit],
+            });
             continue;
         }
 
         let bucket = buckets.entry(unit.edition).or_default();
         bucket.push(unit);
         if bucket.len() >= window {
-            let units = std::mem::take(bucket);
-            if !flush_window(units, batch_size, &tx) {
-                return Ok(());
-            }
+            flush_window(std::mem::take(bucket), batch_size, &queue);
         }
     }
 
     for (_edition, units) in buckets {
-        if !flush_window(units, batch_size, &tx) {
-            return Ok(());
-        }
+        flush_window(units, batch_size, &queue);
     }
 
     Ok(())
 }
 
-/// LPT-pack `units` into `ceil(len / batch_size)` bins and emit each as
-/// a `Batch`. Returns `false` if the receiver has gone away (caller
-/// should stop).
-fn flush_window(mut units: Vec<CrateUnit>, batch_size: usize, tx: &Sender<Batch>) -> bool {
+/// LPT-pack `units` into `ceil(len / batch_size)` bins and push each as
+/// a `Batch`.
+fn flush_window(mut units: Vec<CrateUnit>, batch_size: usize, queue: &PriorityQueue) {
     if units.is_empty() {
-        return true;
+        return;
     }
     let edition = units[0].edition;
     let n_batches = units.len().div_ceil(batch_size).max(1);
@@ -98,9 +88,6 @@ fn flush_window(mut units: Vec<CrateUnit>, batch_size: usize, tx: &Sender<Batch>
         if bin.is_empty() {
             continue;
         }
-        if tx.send(Batch { edition, units: bin }).is_err() {
-            return false;
-        }
+        queue.push(Batch { edition, units: bin });
     }
-    true
 }
