@@ -1,4 +1,4 @@
-use crate::types::{Config, CrateUnit, Edition, Error, Result};
+use crate::types::{Config, CrateUnit, Edition, Error, Result, UnknownEdition};
 use cargo_metadata::MetadataCommand;
 use crossbeam_channel::Sender;
 use std::collections::HashSet;
@@ -76,7 +76,12 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             continue;
         }
 
-        let edition = map_edition(pkg.edition);
+        let edition: Edition = pkg.edition.try_into().map_err(|UnknownEdition(year)| {
+            Error::UnsupportedEdition {
+                edition: year,
+                package: pkg.name.to_string(),
+            }
+        })?;
         let manifest_dir: PathBuf = pkg
             .manifest_path
             .parent()
@@ -114,12 +119,3 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
     Ok(())
 }
 
-fn map_edition(e: cargo_metadata::Edition) -> Edition {
-    match e {
-        cargo_metadata::Edition::E2015 => Edition::E2015,
-        cargo_metadata::Edition::E2018 => Edition::E2018,
-        cargo_metadata::Edition::E2021 => Edition::E2021,
-        cargo_metadata::Edition::E2024 => Edition::E2024,
-        _ => Edition::E2024,
-    }
-}

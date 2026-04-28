@@ -20,17 +20,30 @@ impl Edition {
 }
 
 impl std::str::FromStr for Edition {
-    type Err = Error;
+    type Err = UnknownEdition;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "2015" => Ok(Edition::E2015),
-            "2018" => Ok(Edition::E2018),
-            "2021" => Ok(Edition::E2021),
-            "2024" => Ok(Edition::E2024),
-            other => Err(Error::UnknownEdition(other.to_owned())),
-        }
+        Ok(match s {
+            "2015" => Edition::E2015,
+            "2018" => Edition::E2018,
+            "2021" => Edition::E2021,
+            "2024" => Edition::E2024,
+            other => return Err(UnknownEdition(other.to_owned())),
+        })
     }
 }
+
+impl TryFrom<cargo_metadata::Edition> for Edition {
+    type Error = UnknownEdition;
+    fn try_from(e: cargo_metadata::Edition) -> std::result::Result<Self, Self::Error> {
+        e.as_str().parse()
+    }
+}
+
+/// Edition string we don't recognize. Future variants (2027, 2030, …) land
+/// here. Caller wraps with package context before surfacing.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("unknown edition: {0}")]
+pub struct UnknownEdition(pub String);
 
 #[derive(Debug, Clone)]
 pub struct CrateUnit {
@@ -88,8 +101,8 @@ pub enum Error {
     Metadata(#[from] cargo_metadata::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("unknown edition: {0}")]
-    UnknownEdition(String),
+    #[error("unsupported edition `{edition}` for package `{package}`; cargo-ffmt knows 2015/2018/2021/2024 — bump the dep or pin a known edition")]
+    UnsupportedEdition { edition: String, package: String },
     #[error("package(s) not found in the workspace: {}", .0.join(", "))]
     UnknownPackages(Vec<String>),
     #[error("worker thread panicked")]
