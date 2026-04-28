@@ -22,7 +22,13 @@ pub fn run(cfg: &Config) -> Result<Report> {
         .workers
         .or_else(|| thread::available_parallelism().ok().map(|p| p.get()))
         .unwrap_or(1);
-    let cap = cfg.channel_capacity.unwrap_or(n * 2);
+    // 512 is empirically a no-op vs the n*2 default on Polkadot
+    // (~580 crates) but keeps the producer from ever blocking on
+    // small workspaces — channel size doesn't affect wall time, so
+    // pick generous and forget about it. Memory is bounded by
+    // CrateUnit/CrateResult sizes (entry-point lists, captured
+    // stdout) and stays sub-MB even for big workspaces.
+    let cap = cfg.channel_capacity.unwrap_or(512);
 
     let (unit_tx, unit_rx) = bounded::<types::CrateUnit>(cap);
     let (result_tx, result_rx) = bounded::<types::CrateResult>(cap);

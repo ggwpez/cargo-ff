@@ -25,3 +25,10 @@ crossbeam-channel = "0.5"
 thiserror = "2"
 clap = { version = "4", features = ["derive"], optional = true }
 anyhow = { version = "1", optional = true }
+
+# Release with debug info for `samply` flamegraphs. Same opt level as
+# release; just keeps symbols + line tables so samples resolve to source.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false

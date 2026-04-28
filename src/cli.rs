@@ -32,6 +32,10 @@ pub struct Cli {
     #[arg(long)]
     pub workers: Option<usize>,
 
+    /// Bounded-channel capacity. Defaults to workers*2. Hidden — benchmarking knob.
+    #[arg(long, hide = true)]
+    pub channel_capacity: Option<usize>,
+
     /// Output format.
     #[arg(long, value_enum, default_value_t = MessageFormatArg::Human)]
     pub message_format: MessageFormatArg,
@@ -75,7 +79,7 @@ impl Cli {
             all: self.all,
             check: self.check,
             workers: self.workers,
-            channel_capacity: None,
+            channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
             message_format: self.message_format.into(),
         }
