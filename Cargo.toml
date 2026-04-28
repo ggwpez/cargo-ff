@@ -1,6 +1,27 @@
 [package]
-name = "fast-fmt"
+name = "cargo-ffmt"
 version = "0.1.0"
 edition = "2024"
+description = "Fast parallel cargo fmt — streaming, crate-level parallel rustfmt driver"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "cargo_ffmt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cargo-ffmt"
+path = "src/bin/cargo-ffmt.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:anyhow"]
 
 [dependencies]
+cargo_metadata = "0.23"
+walkdir = "2"
+crossbeam-channel = "0.5"
+thiserror = "2"
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { version = "1", optional = true }
