@@ -30,6 +30,21 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
     //      `--manifest-path` (or cwd). For a virtual workspace with no
     //      implicit package, fall back to `workspace.default-members`.
     let selected: HashSet<&cargo_metadata::PackageId> = if !cfg.packages.is_empty() {
+        let member_names: HashSet<&str> = metadata
+            .packages
+            .iter()
+            .filter(|p| workspace_members.contains(&p.id))
+            .map(|p| p.name.as_str())
+            .collect();
+        let unknown: Vec<String> = cfg
+            .packages
+            .iter()
+            .filter(|n| !member_names.contains(n.as_str()))
+            .cloned()
+            .collect();
+        if !unknown.is_empty() {
+            return Err(Error::UnknownPackages(unknown));
+        }
         let names: HashSet<&str> = cfg.packages.iter().map(String::as_str).collect();
         metadata
             .packages

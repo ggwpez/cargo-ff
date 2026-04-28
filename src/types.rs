@@ -90,6 +90,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("unknown edition: {0}")]
     UnknownEdition(String),
+    #[error("package(s) not found in the workspace: {}", .0.join(", "))]
+    UnknownPackages(Vec<String>),
     #[error("worker thread panicked")]
     WorkerPanic,
     #[error("send failed (channel closed)")]
