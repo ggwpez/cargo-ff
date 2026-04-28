@@ -28,10 +28,10 @@ pub fn run(cfg: &Config) -> Result<Report> {
         .unwrap_or(1);
     let cap = cfg.channel_capacity.unwrap_or(512);
     let batch_size = cfg.batch_size.unwrap_or(3);
-    // 1MB threshold ≈ p98 of crate sizes on polkadot-sdk (~10 crates go
-    // solo). Tunable later if needed; this is the round number that
-    // covers the giants without trigger-happily soloing medium crates.
-    let solo_threshold = 1_000_000u64;
+    // Same cutoff used by the size proxy: any crate the proxy clamped
+    // to `HUGE_CUTOFF_BYTES` is by definition the threshold or above,
+    // so the comparison `>= HUGE_CUTOFF_BYTES` exactly catches them.
+    let solo_threshold = size::HUGE_CUTOFF_BYTES;
 
     let (unit_tx, unit_rx) = bounded::<types::CrateUnit>(cap);
     let queue = Arc::new(dispatch::PriorityQueue::new());
