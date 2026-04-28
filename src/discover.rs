@@ -24,12 +24,16 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
         metadata.workspace_members.iter().collect();
 
     // Resolve which packages to format. Precedence (matches `cargo fmt`):
-    //   1. `-p PKG` (cfg.packages) → format exactly those.
-    //   2. `--all` → format every workspace member.
+    //   1. `--all` → format every workspace member. `-p` is ignored
+    //      (even unknown values), matching `cargo fmt --all -p foo`.
+    //   2. `-p PKG` (cfg.packages) → format exactly those; unknown
+    //      names error.
     //   3. otherwise → format the package implicitly selected by
     //      `--manifest-path` (or cwd). For a virtual workspace with no
     //      implicit package, fall back to `workspace.default-members`.
-    let selected: HashSet<&cargo_metadata::PackageId> = if !cfg.packages.is_empty() {
+    let selected: HashSet<&cargo_metadata::PackageId> = if cfg.all {
+        workspace_members.clone()
+    } else if !cfg.packages.is_empty() {
         let member_names: HashSet<&str> = metadata
             .packages
             .iter()
@@ -52,8 +56,6 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             .filter(|p| workspace_members.contains(&p.id) && names.contains(p.name.as_str()))
             .map(|p| &p.id)
             .collect()
-    } else if cfg.all {
-        workspace_members.clone()
     } else if let Some(root) = metadata.root_package() {
         std::iter::once(&root.id).collect()
     } else {
