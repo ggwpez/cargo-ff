@@ -5,7 +5,7 @@
 //! between crates matter, since the coalescer uses size_bytes to balance
 //! batches. Strategies trade discovery cost for accuracy.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Cap above which a crate is unambiguously a "giant" for solo
 /// dispatch. We only need a binary classifier here — the priority queue
@@ -22,22 +22,8 @@ pub(crate) const HUGE_CUTOFF_BYTES: u64 = 1_000_000;
 /// classify them — typically tens of files instead of thousands. Files
 /// stat'd here end up in the page cache for rustfmt's own reads, so
 /// the I/O is recouped downstream.
-pub(crate) fn estimate(manifest_dir: &Path, entry_points: &[PathBuf]) -> u64 {
-    let _ = entry_points;
+pub(crate) fn estimate(manifest_dir: &Path) -> u64 {
     manifest_dir_rs_bytes_clamped(manifest_dir, HUGE_CUTOFF_BYTES)
-}
-
-/// Sum of bytes of the crate's target entry points (`src/lib.rs`,
-/// `src/bin/foo.rs`, `tests/it.rs`, …). Free — we already have these
-/// paths from cargo metadata. Undercounts: rustfmt walks the `mod`
-/// tree from each entry, so a 200-byte `lib.rs` declaring submodules
-/// actually represents far more work than 200 bytes.
-#[allow(dead_code)]
-pub(crate) fn entry_point_bytes(entries: &[PathBuf]) -> u64 {
-    entries
-        .iter()
-        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-        .sum()
 }
 
 /// Sum of bytes of every `*.rs` file under `manifest_dir`, skipping

@@ -50,11 +50,11 @@ pub struct CrateUnit {
     pub edition: Edition,
     pub manifest_dir: PathBuf,
     pub files: Vec<PathBuf>,
-    /// Sum of entry-point file sizes in bytes. A rough proxy for the
-    /// formatting work this crate represents — undercounts by a constant
-    /// factor (rustfmt walks the mod tree from each entry point and
-    /// reads more than just these files), but the *ratios* between
-    /// crates are what matter for batching decisions.
+    /// Work-size proxy: sum of `*.rs` bytes under `manifest_dir`,
+    /// clamped at `size::HUGE_CUTOFF_BYTES`. Drives LPT bin-packing in
+    /// the coalescer and dispatch ordering in the priority queue. Only
+    /// the *ratios* between crates matter; a value exactly equal to the
+    /// cutoff means the crate is at-or-above the solo-dispatch threshold.
     pub size_bytes: u64,
 }
 
@@ -98,14 +98,6 @@ pub struct BatchResult {
     pub files: Vec<(PathBuf, PathBuf)>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum MessageFormat {
-    #[default]
-    Human,
-    Short,
-    Json,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub manifest_path: Option<PathBuf>,
@@ -117,11 +109,11 @@ pub struct Config {
     pub workers: Option<usize>,
     pub channel_capacity: Option<usize>,
     pub rustfmt_args: Vec<String>,
-    pub message_format: MessageFormat,
     /// Crates per rustfmt invocation. Higher values amortize spawn cost
     /// (~40ms/invocation on M-series) at the cost of coarser scheduling
-    /// granularity. `None` → pick a default based on workspace size and
-    /// worker count.
+    /// granularity. `None` → 3 (the curve is flat across bs=12-48 thanks
+    /// to the priority queue, so a small default keeps tiny workspaces
+    /// from collapsing into one batch).
     pub batch_size: Option<usize>,
 }
 

@@ -109,7 +109,7 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             continue;
         }
 
-        let size_bytes = size::estimate(&manifest_dir, &entry_points);
+        let size_bytes = size::estimate(&manifest_dir);
         let unit = CrateUnit {
             edition,
             manifest_dir,

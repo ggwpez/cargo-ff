@@ -46,7 +46,7 @@ flamegraph:
 
 # Profile a single rustfmt invocation to see the per-invocation overhead floor.
 flamegraph-rustfmt:
-    RUSTUP_TOOLCHAIN=nightly samply record -- rustfmt --edition 2024 --check src/lib.rs src/discover.rs src/exec.rs src/report.rs src/cli.rs src/types.rs
+    RUSTUP_TOOLCHAIN=nightly samply record -- rustfmt --edition 2024 --check src/*.rs
 
 # Save a profile to /tmp without opening the UI (handy for CI / sharing).
 flamegraph-save:

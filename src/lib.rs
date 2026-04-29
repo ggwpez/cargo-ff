@@ -10,7 +10,7 @@ mod size;
 #[cfg(feature = "cli")]
 pub mod cli;
 
-pub use types::{Config, Edition, Error, FileFailure, MessageFormat, Report, Result};
+pub use types::{Config, Edition, Error, FileFailure, Report, Result};
 
 #[doc(hidden)]
 pub mod __test_only {

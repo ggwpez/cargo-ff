@@ -1,4 +1,4 @@
-use crate::types::{Config, MessageFormat};
+use crate::types::Config;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -32,7 +32,7 @@ pub struct Cli {
     #[arg(long)]
     pub workers: Option<usize>,
 
-    /// Bounded-channel capacity. Defaults to workers*2. Hidden — benchmarking knob.
+    /// Bounded-channel capacity. Default 512. Hidden — benchmarking knob.
     #[arg(long, hide = true)]
     pub channel_capacity: Option<usize>,
 
@@ -41,30 +41,9 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub batch_size: Option<usize>,
 
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = MessageFormatArg::Human)]
-    pub message_format: MessageFormatArg,
-
     /// Extra arguments forwarded to rustfmt (after `--`).
     #[arg(last = true)]
     pub rustfmt_args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum MessageFormatArg {
-    Human,
-    Short,
-    Json,
-}
-
-impl From<MessageFormatArg> for MessageFormat {
-    fn from(v: MessageFormatArg) -> Self {
-        match v {
-            MessageFormatArg::Human => MessageFormat::Human,
-            MessageFormatArg::Short => MessageFormat::Short,
-            MessageFormatArg::Json => MessageFormat::Json,
-        }
-    }
 }
 
 impl Cli {
@@ -86,7 +65,6 @@ impl Cli {
             workers: self.workers,
             channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
-            message_format: self.message_format.into(),
             batch_size: self.batch_size,
         }
     }
