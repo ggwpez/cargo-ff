@@ -3,7 +3,6 @@ use crate::types::{Batch, CrateUnit, Edition, Result};
 use crossbeam_channel::Receiver;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::Arc;
 
 /// Group `CrateUnit`s by edition and emit `Batch`es packed by LPT
 /// (Longest Processing Time first) bin-packing within a sliding window.
@@ -29,7 +28,7 @@ use std::sync::Arc;
 /// using `let gen = 5;` fails under `--edition 2024`).
 pub(crate) fn run(
     rx: Receiver<CrateUnit>,
-    queue: Arc<PriorityQueue>,
+    queue: &PriorityQueue,
     batch_size: usize,
     pack_multiplier: usize,
     solo_threshold_bytes: u64,
@@ -52,12 +51,12 @@ pub(crate) fn run(
         let bucket = buckets.entry(unit.edition).or_default();
         bucket.push(unit);
         if bucket.len() >= window {
-            flush_window(std::mem::take(bucket), batch_size, &queue);
+            flush_window(std::mem::take(bucket), batch_size, queue);
         }
     }
 
     for (_edition, units) in buckets {
-        flush_window(units, batch_size, &queue);
+        flush_window(units, batch_size, queue);
     }
 
     Ok(())

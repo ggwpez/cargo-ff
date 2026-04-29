@@ -88,7 +88,7 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
         let manifest_dir: PathBuf = pkg
             .manifest_path
             .parent()
-            .map(|p| p.to_path_buf().into())
+            .map(|p| p.as_std_path().to_path_buf())
             .ok_or_else(|| {
                 Error::Io(std::io::Error::other(format!(
                     "manifest_path has no parent: {}",
@@ -98,7 +98,7 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
 
         let mut entry_points: Vec<PathBuf> = Vec::new();
         for tgt in &pkg.targets {
-            let raw: PathBuf = tgt.src_path.clone().into();
+            let raw = tgt.src_path.as_std_path().to_path_buf();
             let canon = raw.canonicalize().unwrap_or(raw);
             if claimed.insert(canon.clone()) {
                 entry_points.push(canon);

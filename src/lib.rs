@@ -19,7 +19,7 @@ pub mod __test_only {
 
 use crossbeam_channel::bounded;
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 pub fn run(cfg: &Config) -> Result<Report> {
     let n = cfg
@@ -44,7 +44,7 @@ pub fn run(cfg: &Config) -> Result<Report> {
     // workers' `pop()` returns `None` once everything is drained.
     let coalescer_q = queue.clone();
     let coalescer = thread::spawn(move || {
-        let r = coalesce::run(unit_rx, coalescer_q.clone(), batch_size, 4, solo_threshold);
+        let r = coalesce::run(unit_rx, &coalescer_q, batch_size, 4, solo_threshold);
         coalescer_q.close();
         r
     });
@@ -60,18 +60,18 @@ pub fn run(cfg: &Config) -> Result<Report> {
 
     let report = report::aggregate(result_rx);
 
-    match producer.join() {
-        Ok(res) => res?,
-        Err(_) => return Err(Error::WorkerPanic),
-    }
-    match coalescer.join() {
-        Ok(res) => res?,
-        Err(_) => return Err(Error::WorkerPanic),
-    }
+    join_fallible(producer, "producer")?;
+    join_fallible(coalescer, "coalescer")?;
     for w in workers {
-        if w.join().is_err() {
-            return Err(Error::WorkerPanic);
-        }
+        join_void(w, "worker")?;
     }
     Ok(report)
+}
+
+fn join_fallible(h: JoinHandle<Result<()>>, name: &'static str) -> Result<()> {
+    h.join().map_err(|_| Error::ThreadPanicked(name))?
+}
+
+fn join_void(h: JoinHandle<()>, name: &'static str) -> Result<()> {
+    h.join().map_err(|_| Error::ThreadPanicked(name))
 }

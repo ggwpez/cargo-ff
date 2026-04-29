@@ -139,8 +139,8 @@ pub enum Error {
     UnsupportedEdition { edition: String, package: String },
     #[error("package(s) not found in the workspace: {}", .0.join(", "))]
     UnknownPackages(Vec<String>),
-    #[error("worker thread panicked")]
-    WorkerPanic,
+    #[error("{0} thread panicked")]
+    ThreadPanicked(&'static str),
     #[error("send failed (channel closed)")]
     SendClosed,
 }
