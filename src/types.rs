@@ -131,11 +131,15 @@ pub struct FileFailure {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("`workers` must be >= 1 (got {0})")]
+    InvalidWorkers(usize),
     #[error("cargo metadata failed: {0}")]
     Metadata(#[from] cargo_metadata::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("unsupported edition `{edition}` for package `{package}`; cargo-ffmt knows 2015/2018/2021/2024 — bump the dep or pin a known edition")]
+    #[error(
+        "unsupported edition `{edition}` for package `{package}`; cargo-ffmt knows 2015/2018/2021/2024 — bump the dep or pin a known edition"
+    )]
     UnsupportedEdition { edition: String, package: String },
     #[error("package(s) not found in the workspace: {}", .0.join(", "))]
     UnknownPackages(Vec<String>),

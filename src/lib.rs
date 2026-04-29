@@ -22,6 +22,10 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 pub fn run(cfg: &Config) -> Result<Report> {
+    if matches!(cfg.workers, Some(0)) {
+        return Err(Error::InvalidWorkers(0));
+    }
+
     let n = cfg
         .workers
         .or_else(|| thread::available_parallelism().ok().map(|p| p.get()))

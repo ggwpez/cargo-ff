@@ -1,5 +1,6 @@
 use crate::types::Config;
 use clap::Parser;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -30,7 +31,7 @@ pub struct Cli {
 
     /// Number of worker threads. Defaults to available_parallelism().
     #[arg(long)]
-    pub workers: Option<usize>,
+    pub workers: Option<NonZeroUsize>,
 
     /// Bounded-channel capacity. Default 512. Hidden — benchmarking knob.
     #[arg(long, hide = true)]
@@ -62,7 +63,7 @@ impl Cli {
             packages: self.packages,
             all: self.all,
             check: self.check,
-            workers: self.workers,
+            workers: self.workers.map(NonZeroUsize::get),
             channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
             batch_size: self.batch_size,

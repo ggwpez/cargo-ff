@@ -87,6 +87,9 @@ fn flush_window(mut units: Vec<CrateUnit>, batch_size: usize, queue: &PriorityQu
         if bin.is_empty() {
             continue;
         }
-        queue.push(Batch { edition, units: bin });
+        queue.push(Batch {
+            edition,
+            units: bin,
+        });
     }
 }

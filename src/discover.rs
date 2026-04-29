@@ -79,12 +79,13 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             continue;
         }
 
-        let edition: Edition = pkg.edition.try_into().map_err(|UnknownEdition(year)| {
-            Error::UnsupportedEdition {
-                edition: year,
-                package: pkg.name.to_string(),
-            }
-        })?;
+        let edition: Edition =
+            pkg.edition
+                .try_into()
+                .map_err(|UnknownEdition(year)| Error::UnsupportedEdition {
+                    edition: year,
+                    package: pkg.name.to_string(),
+                })?;
         let manifest_dir: PathBuf = pkg
             .manifest_path
             .parent()
@@ -123,4 +124,3 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
 
     Ok(())
 }
-
