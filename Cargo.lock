@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-ff"
-version = "0.1.0"
+version = "0.0.1-rc1"
 dependencies = [
  "anyhow",
  "cargo_metadata",
