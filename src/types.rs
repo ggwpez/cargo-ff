@@ -115,6 +115,12 @@ pub struct Config {
     /// to the priority queue, so a small default keeps tiny workspaces
     /// from collapsing into one batch).
     pub batch_size: Option<usize>,
+    /// Experimental: skip rustfmt for crates whose `*.rs` file mtimes
+    /// match the prior successful run. After a write that actually
+    /// rewrote files, the next run will miss (mtimes shifted) and
+    /// re-dispatch — correct, just one wasted invocation. See
+    /// `cache.rs` for soundness caveats.
+    pub experimental_cache: bool,
 }
 
 #[derive(Debug)]

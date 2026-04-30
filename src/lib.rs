@@ -1,5 +1,6 @@
 pub mod types;
 
+mod cache;
 mod coalesce;
 mod discover;
 mod dispatch;
@@ -14,7 +15,12 @@ pub use types::{Config, Edition, Error, FileFailure, Report, Result};
 
 #[doc(hidden)]
 pub mod __test_only {
-    pub use crate::discover::run as discover_run;
+    use crate::types::{Config, CrateUnit, Result};
+    use crossbeam_channel::Sender;
+
+    pub fn discover_run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
+        crate::discover::run(cfg, tx).map(drop)
+    }
 }
 
 use crossbeam_channel::bounded;
@@ -64,15 +70,25 @@ pub fn run(cfg: &Config) -> Result<Report> {
 
     let report = report::aggregate(result_rx);
 
-    join_fallible(producer, "producer")?;
+    let cache_opt = join_fallible(producer, "producer")?;
     join_fallible(coalescer, "coalescer")?;
     for w in workers {
         join_void(w, "worker")?;
     }
+
+    // Commit the skip cache. Drop pending entries for crates that had
+    // any --check failure so future runs re-fingerprint and surface them.
+    if let Some(mut cache) = cache_opt {
+        for f in &report.failures {
+            cache.invalidate(&f.manifest_dir);
+        }
+        let _ = cache.commit_and_save();
+    }
+
     Ok(report)
 }
 
-fn join_fallible(h: JoinHandle<Result<()>>, name: &'static str) -> Result<()> {
+fn join_fallible<T>(h: JoinHandle<Result<T>>, name: &'static str) -> Result<T> {
     h.join().map_err(|_| Error::ThreadPanicked(name))?
 }
 

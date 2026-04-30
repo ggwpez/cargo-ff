@@ -1,3 +1,4 @@
+use crate::cache;
 use crate::size;
 use crate::types::{Config, CrateUnit, Edition, Error, Result, UnknownEdition};
 use cargo_metadata::MetadataCommand;
@@ -13,13 +14,17 @@ use std::path::PathBuf;
 /// tree from each entry point. This matches what `cargo fmt` does,
 /// including handling of `#[path = "…"]` attributes and skipping of
 /// files that aren't declared as `mod` (e.g. trybuild ui fixtures).
-pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
+pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::Cache>> {
     let mut cmd = MetadataCommand::new();
     cmd.no_deps();
     if let Some(p) = &cfg.manifest_path {
         cmd.manifest_path(p);
     }
     let metadata = cmd.exec()?;
+
+    let mut cache_opt = cfg
+        .experimental_cache
+        .then(|| cache::Cache::load(metadata.workspace_root.as_std_path()));
 
     let workspace_members: HashSet<&cargo_metadata::PackageId> =
         metadata.workspace_members.iter().collect();
@@ -110,7 +115,17 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
             continue;
         }
 
-        let size_bytes = size::estimate(&manifest_dir);
+        let size_bytes = if let Some(c) = cache_opt.as_mut() {
+            let (fp, bytes) = cache::build(&manifest_dir, size::HUGE_CUTOFF_BYTES);
+            if c.matches(&manifest_dir, &fp) {
+                // Cached fingerprint matches — skip dispatch entirely.
+                continue;
+            }
+            c.stage(manifest_dir.clone(), fp);
+            bytes
+        } else {
+            size::estimate(&manifest_dir)
+        };
         let unit = CrateUnit {
             edition,
             manifest_dir,
@@ -122,5 +137,5 @@ pub fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(cache_opt)
 }

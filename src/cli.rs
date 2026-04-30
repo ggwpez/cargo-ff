@@ -45,6 +45,12 @@ pub struct Cli {
     /// Extra arguments forwarded to rustfmt (after `--`).
     #[arg(last = true)]
     pub rustfmt_args: Vec<String>,
+
+    /// Experimental: skip rustfmt for crates whose `*.rs` mtimes match
+    /// the prior successful run. May produce stale results if files
+    /// outside `manifest_dir` are pulled in via `#[path]`.
+    #[arg(long, hide = true)]
+    pub experimental_cache: bool,
 }
 
 impl Cli {
@@ -67,6 +73,7 @@ impl Cli {
             channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
             batch_size: self.batch_size,
+            experimental_cache: self.experimental_cache,
         }
     }
 }
