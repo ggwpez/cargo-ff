@@ -15,7 +15,7 @@ fn run_rejects_zero_workers() {
 fn cli_rejects_zero_workers() {
     use clap::Parser;
 
-    let err = cargo_ff::cli::Cli::try_parse_from(["cargo-ff", "--workers", "0"])
+    let err = cargo_ff::cli::Cli::try_parse_from(["cargo-ff", "--ff-workers", "0"])
         .expect_err("clap must reject workers=0");
     assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
 }

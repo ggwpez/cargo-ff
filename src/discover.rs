@@ -3,7 +3,8 @@ use crate::size;
 use crate::types::{Config, CrateUnit, Edition, Error, Result, UnknownEdition};
 use cargo_metadata::MetadataCommand;
 use crossbeam_channel::Sender;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Run the producer.
@@ -77,7 +78,7 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
     // polkadot's `malus`). After canonicalization those files would be
     // claimed by multiple crates, possibly with different editions.
     // First crate to claim a file wins.
-    let mut claimed: HashSet<PathBuf> = HashSet::new();
+    let mut claimed: HashMap<PathBuf, String> = HashMap::new();
 
     for pkg in &metadata.packages {
         if !selected.contains(&pkg.id) {
@@ -106,8 +107,23 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
         for tgt in &pkg.targets {
             let raw = tgt.src_path.as_std_path().to_path_buf();
             let canon = raw.canonicalize().unwrap_or(raw);
-            if claimed.insert(canon.clone()) {
-                entry_points.push(canon);
+            match claimed.entry(canon.clone()) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(pkg.name.to_string());
+                    entry_points.push(canon);
+                }
+                std::collections::hash_map::Entry::Occupied(o) => {
+                    if cfg.warnings {
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "warning: crate `{}` claims `{}`, already owned by `{}`; using `{}`'s edition",
+                            pkg.name,
+                            canon.display(),
+                            o.get(),
+                            o.get(),
+                        );
+                    }
+                }
             }
         }
 

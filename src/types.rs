@@ -121,6 +121,10 @@ pub struct Config {
     /// re-dispatch — correct, just one wasted invocation. See
     /// `cache.rs` for soundness caveats.
     pub experimental_cache: bool,
+    /// Emit advisory warnings to stderr (cross-crate file claims,
+    /// stable-rustfmt-on-PATH). Off by default — these are silent in
+    /// stock `cargo fmt` too, and the noise isn't worth it for most users.
+    pub warnings: bool,
 }
 
 #[derive(Debug)]

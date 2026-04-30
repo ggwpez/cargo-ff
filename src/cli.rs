@@ -1,5 +1,5 @@
 use crate::types::Config;
-use clap::Parser;
+use clap::{Args, Parser};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -29,28 +29,40 @@ pub struct Cli {
     #[arg(long)]
     pub manifest_path: Option<PathBuf>,
 
-    /// Number of worker threads. Defaults to available_parallelism().
-    #[arg(long)]
-    pub workers: Option<NonZeroUsize>,
-
-    /// Bounded-channel capacity. Default 512. Hidden — benchmarking knob.
-    #[arg(long, hide = true)]
-    pub channel_capacity: Option<usize>,
-
-    /// Crates per rustfmt invocation. Higher amortizes spawn cost; lower
-    /// gives finer scheduling granularity. Hidden — benchmarking knob.
-    #[arg(long, hide = true)]
-    pub batch_size: Option<usize>,
-
     /// Extra arguments forwarded to rustfmt (after `--`).
     #[arg(last = true)]
     pub rustfmt_args: Vec<String>,
 
+    #[command(flatten)]
+    pub ff: FfArgs,
+}
+
+/// cargo-ff-specific flags. All long names are prefixed `--ff-*` so they
+/// can never collide with a flag added upstream by `cargo fmt`.
+#[derive(Debug, Args)]
+pub struct FfArgs {
+    /// Number of worker threads. Defaults to available_parallelism().
+    #[arg(long = "ff-workers")]
+    pub workers: Option<NonZeroUsize>,
+
+    /// Bounded-channel capacity. Default 512. Hidden — benchmarking knob.
+    #[arg(long = "ff-channel-capacity", hide = true)]
+    pub channel_capacity: Option<usize>,
+
+    /// Crates per rustfmt invocation. Higher amortizes spawn cost; lower
+    /// gives finer scheduling granularity. Hidden — benchmarking knob.
+    #[arg(long = "ff-batch-size", hide = true)]
+    pub batch_size: Option<usize>,
+
     /// Experimental: skip rustfmt for crates whose `*.rs` mtimes match
     /// the prior successful run. May produce stale results if files
     /// outside `manifest_dir` are pulled in via `#[path]`.
-    #[arg(long, hide = true)]
+    #[arg(long = "ff-experimental-cache", hide = true)]
     pub experimental_cache: bool,
+
+    /// Emit advisory warnings to stderr (off by default).
+    #[arg(long = "ff-warnings")]
+    pub warnings: bool,
 }
 
 impl Cli {
@@ -69,11 +81,12 @@ impl Cli {
             packages: self.packages,
             all: self.all,
             check: self.check,
-            workers: self.workers.map(NonZeroUsize::get),
-            channel_capacity: self.channel_capacity,
             rustfmt_args: self.rustfmt_args,
-            batch_size: self.batch_size,
-            experimental_cache: self.experimental_cache,
+            workers: self.ff.workers.map(NonZeroUsize::get),
+            channel_capacity: self.ff.channel_capacity,
+            batch_size: self.ff.batch_size,
+            experimental_cache: self.ff.experimental_cache,
+            warnings: self.ff.warnings,
         }
     }
 }

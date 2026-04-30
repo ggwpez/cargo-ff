@@ -32,12 +32,12 @@ chmod +x .git/hooks/pre-commit
 
 ## Experimental mtime cache
 
-`--experimental-cache` records each crate's `*.rs` mtimes after a successful run. On the next run,
+`--ff-experimental-cache` records each crate's `*.rs` mtimes after a successful run. On the next run,
 crates whose fingerprint is unchanged are not dispatched to rustfmt at all. ~5× speedup on a clean
 tree.
 
 ```sh
-cargo +nightly ff --all --experimental-cache
+cargo +nightly ff --all --ff-experimental-cache
 ```
 
 Cache lives at `~/.cache/cargo-ff/fingerprints.tsv`, salted by the `rustfmt --version` output and

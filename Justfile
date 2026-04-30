@@ -36,7 +36,7 @@ bench-workers:
     @for w in 1 2 4 8 12 16 24 32; do \
       for i in 1 2 3; do \
         s=$$(python3 -c 'import time; print(time.time())'); \
-        ./target/profiling/cargo-ff ff --check --all --workers $$w --manifest-path {{big_repo}}/Cargo.toml >/dev/null 2>&1; \
+        ./target/profiling/cargo-ff ff --check --all --ff-workers $$w --manifest-path {{big_repo}}/Cargo.toml >/dev/null 2>&1; \
         e=$$(python3 -c 'import time; print(time.time())'); \
         d=$$(python3 -c "print($$e - $$s)"); \
         echo "  w=$$w run=$$i  $${d}s"; \

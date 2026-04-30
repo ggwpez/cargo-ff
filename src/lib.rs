@@ -32,6 +32,10 @@ pub fn run(cfg: &Config) -> Result<Report> {
         return Err(Error::InvalidWorkers(0));
     }
 
+    if cfg.warnings {
+        warn_if_stable_rustfmt();
+    }
+
     let n = cfg
         .workers
         .or_else(|| thread::available_parallelism().ok().map(|p| p.get()))
@@ -94,4 +98,27 @@ fn join_fallible<T>(h: JoinHandle<Result<T>>, name: &'static str) -> Result<T> {
 
 fn join_void(h: JoinHandle<()>, name: &'static str) -> Result<()> {
     h.join().map_err(|_| Error::ThreadPanicked(name))
+}
+
+/// `rustfmt --version` prints e.g. `rustfmt 1.8.0-nightly (…)`. If the
+/// `nightly` marker is absent, unstable `rustfmt.toml` options are silently
+/// dropped and output diverges from `cargo +nightly fmt`.
+fn warn_if_stable_rustfmt() {
+    use std::io::Write;
+    let Ok(out) = std::process::Command::new("rustfmt").arg("--version").output() else {
+        return;
+    };
+    if !out.status.success() {
+        return;
+    }
+    let v = String::from_utf8_lossy(&out.stdout);
+    if !v.contains("nightly") {
+        let _ = writeln!(
+            std::io::stderr(),
+            "warning: rustfmt on PATH appears to be the stable channel ({}); \
+             unstable rustfmt.toml options will be silently ignored. \
+             Run via `cargo +nightly ff` for parity with `cargo +nightly fmt`.",
+            v.trim(),
+        );
+    }
 }
