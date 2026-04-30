@@ -1,17 +1,17 @@
 [package]
-name = "cargo-ffmt"
+name = "cargo-ff"
 version = "0.1.0"
 edition = "2024"
 description = "Fast parallel cargo fmt — streaming, crate-level parallel rustfmt driver"
 license = "MIT OR Apache-2.0"
 
 [lib]
-name = "cargo_ffmt"
+name = "cargo_ff"
 path = "src/lib.rs"
 
 [[bin]]
-name = "cargo-ffmt"
-path = "src/bin/cargo-ffmt.rs"
+name = "cargo-ff"
+path = "src/bin/cargo-ff.rs"
 required-features = ["cli"]
 
 [features]

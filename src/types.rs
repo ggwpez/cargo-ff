@@ -138,7 +138,7 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error(
-        "unsupported edition `{edition}` for package `{package}`; cargo-ffmt knows 2015/2018/2021/2024 — bump the dep or pin a known edition"
+        "unsupported edition `{edition}` for package `{package}`; cargo-ff knows 2015/2018/2021/2024 — bump the dep or pin a known edition"
     )]
     UnsupportedEdition { edition: String, package: String },
     #[error("package(s) not found in the workspace: {}", .0.join(", "))]

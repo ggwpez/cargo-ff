@@ -5,8 +5,8 @@
 //! tests/it.rs, …), not every .rs file. rustfmt walks the `mod` tree
 //! from each entry point itself.
 
-use cargo_ffmt::Config;
-use cargo_ffmt::types::CrateUnit;
+use cargo_ff::Config;
+use cargo_ff::types::CrateUnit;
 use crossbeam_channel::bounded;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -15,7 +15,7 @@ fn drain_discover(cfg: &Config) -> (Vec<CrateUnit>, Vec<u128>) {
     let (tx, rx) = bounded::<CrateUnit>(64);
     let cfg_d = cfg.clone();
     let start = Instant::now();
-    let producer = std::thread::spawn(move || cargo_ffmt::__test_only::discover_run(&cfg_d, tx));
+    let producer = std::thread::spawn(move || cargo_ff::__test_only::discover_run(&cfg_d, tx));
 
     let mut units = Vec::new();
     let mut send_times = Vec::new();
@@ -44,10 +44,10 @@ fn discover_runs_on_self() {
 #[test]
 #[ignore]
 fn discover_on_big_repo() {
-    let path = match std::env::var("FFMT_BIG_REPO") {
+    let path = match std::env::var("FF_BIG_REPO") {
         Ok(p) => PathBuf::from(p),
         Err(_) => {
-            eprintln!("FFMT_BIG_REPO not set; skipping");
+            eprintln!("FF_BIG_REPO not set; skipping");
             return;
         }
     };

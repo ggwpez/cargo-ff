@@ -1,12 +1,12 @@
-//! Equivalence harness — proves `cargo ffmt` produces byte-identical
+//! Equivalence harness — proves `cargo ff` produces byte-identical
 //! tree state to `cargo +nightly fmt` after running on the same input.
 //!
 //! Strategy:
-//! 1. Take a clean git repo (`FFMT_BIG_REPO` env var, or in-tree fixture).
+//! 1. Take a clean git repo (`FF_BIG_REPO` env var, or in-tree fixture).
 //! 2. Create two cheap copies via `git worktree add`.
 //! 3. Apply identical synthetic formatting violations to both.
 //! 4. Run stock `cargo +nightly fmt` in worktree A.
-//! 5. Run `cargo +nightly ffmt` in worktree B.
+//! 5. Run `cargo +nightly ff` in worktree B.
 //! 6. Assert exit codes equal AND `diff -ru A B` (excl. target/.git) is empty.
 //!
 //! This is the strong correctness test. Any divergence is a routing bug
@@ -49,7 +49,7 @@ struct Worktree {
 
 impl Worktree {
     fn add(upstream: &Path, name: &str) -> Self {
-        let tmp = std::env::temp_dir().join(format!("ffmt-equiv-{name}-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("ff-equiv-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         // Detach so we don't leave a branch dangling.
         git(
@@ -79,7 +79,7 @@ impl Drop for Worktree {
 /// the exact same bytes appended to the same path.
 fn dirty_tree(repo: &Path) -> Vec<PathBuf> {
     let mut touched = Vec::new();
-    let bad = "\npub fn __ffmt_equiv_test_helper(  x:i32,y :i32 )->i32{x+y}\n";
+    let bad = "\npub fn __ff_equiv_test_helper(  x:i32,y :i32 )->i32{x+y}\n";
 
     // Find a small, deterministic set of lib.rs files to dirty.
     let out = Command::new("find")
@@ -140,48 +140,48 @@ fn run_fmt(cmd: &str, args: &[&str], repo: &Path) -> std::process::ExitStatus {
 #[test]
 #[ignore]
 fn equivalence_on_big_repo() {
-    let path = match std::env::var("FFMT_BIG_REPO") {
+    let path = match std::env::var("FF_BIG_REPO") {
         Ok(p) => PathBuf::from(p),
         Err(_) => {
-            eprintln!("FFMT_BIG_REPO not set; skipping");
+            eprintln!("FF_BIG_REPO not set; skipping");
             return;
         }
     };
     assert_clean(&path);
 
     let stock = Worktree::add(&path, "stock");
-    let ffmt = Worktree::add(&path, "ffmt");
+    let ff = Worktree::add(&path, "ff");
 
     // Sanity: both worktrees should agree out of the gate.
-    diff_trees(&stock.path, &ffmt.path).expect("worktrees diverge before any modification");
+    diff_trees(&stock.path, &ff.path).expect("worktrees diverge before any modification");
 
     // Phase 1: clean tree must format identically (no changes from either).
     let stock_check = run_fmt("fmt", &["--check"], &stock.path);
-    let ffmt_check = run_fmt("ffmt", &["--check"], &ffmt.path);
+    let ff_check = run_fmt("ff", &["--check"], &ff.path);
     assert_eq!(
         stock_check.code(),
-        ffmt_check.code(),
+        ff_check.code(),
         "--check exit codes diverge on clean tree"
     );
-    diff_trees(&stock.path, &ffmt.path).expect("clean tree diverges after --check");
+    diff_trees(&stock.path, &ff.path).expect("clean tree diverges after --check");
 
     // Phase 2: introduce identical synthetic violations, then run both
     // formatters, compare results.
     let touched_stock = dirty_tree(&stock.path);
-    let touched_ffmt = dirty_tree(&ffmt.path);
+    let touched_ff = dirty_tree(&ff.path);
     assert_eq!(
         touched_stock.len(),
-        touched_ffmt.len(),
+        touched_ff.len(),
         "dirty_tree picked different file sets — cannot compare"
     );
-    diff_trees(&stock.path, &ffmt.path).expect("dirtied trees should still match");
+    diff_trees(&stock.path, &ff.path).expect("dirtied trees should still match");
 
     let stock_status = run_fmt("fmt", &[], &stock.path);
-    let ffmt_status = run_fmt("ffmt", &[], &ffmt.path);
+    let ff_status = run_fmt("ff", &[], &ff.path);
     assert!(stock_status.success(), "stock cargo fmt failed");
-    assert!(ffmt_status.success(), "cargo ffmt failed");
+    assert!(ff_status.success(), "cargo ff failed");
 
-    if let Err(diff) = diff_trees(&stock.path, &ffmt.path) {
+    if let Err(diff) = diff_trees(&stock.path, &ff.path) {
         // Truncate so test output is readable.
         let preview: String = diff.lines().take(80).collect::<Vec<_>>().join("\n");
         panic!(

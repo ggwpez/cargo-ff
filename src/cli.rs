@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "cargo-ffmt",
-    bin_name = "cargo ffmt",
-    about = "Fast parallel cargo fmt — streaming, crate-level parallel rustfmt driver",
+    name = "cargo-ff",
+    bin_name = "cargo ff",
+    about = "Fast Format is a fast drop-in replacement for cargo fmt",
     version
 )]
 pub struct Cli {
@@ -48,10 +48,10 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Parse argv, stripping the cargo-subcommand `argv[1] == "ffmt"` if present.
+    /// Parse argv, stripping the cargo-subcommand `argv[1] == "ff"` if present.
     pub fn parse_argv() -> Self {
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-        if args.len() >= 2 && args[1] == "ffmt" {
+        if args.len() >= 2 && args[1] == "ff" {
             args.remove(1);
         }
         Cli::parse_from(args)
