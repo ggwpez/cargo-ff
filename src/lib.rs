@@ -105,7 +105,10 @@ fn join_void(h: JoinHandle<()>, name: &'static str) -> Result<()> {
 /// dropped and output diverges from `cargo +nightly fmt`.
 fn warn_if_stable_rustfmt() {
     use std::io::Write;
-    let Ok(out) = std::process::Command::new("rustfmt").arg("--version").output() else {
+    let Ok(out) = std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+    else {
         return;
     };
     if !out.status.success() {

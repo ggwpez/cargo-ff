@@ -51,7 +51,9 @@ impl Cache {
     }
 
     pub fn matches(&self, manifest_dir: &Path, current: &Fingerprint) -> bool {
-        self.retained.get(manifest_dir).is_some_and(|fp| fp == current)
+        self.retained
+            .get(manifest_dir)
+            .is_some_and(|fp| fp == current)
     }
 
     pub fn stage(&mut self, manifest_dir: PathBuf, fingerprint: Fingerprint) {

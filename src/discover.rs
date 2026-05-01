@@ -35,9 +35,17 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
     //      (even unknown values), matching `cargo fmt --all -p foo`.
     //   2. `-p PKG` (cfg.packages) → format exactly those; unknown
     //      names error.
-    //   3. otherwise → format the package implicitly selected by
+    //   3. running at the workspace root → every workspace member.
+    //      `cargo fmt`'s quirk: when the effective manifest is the
+    //      workspace root's manifest, it ignores both `default-members`
+    //      and a root `[package]` and formats every member. Reproducing
+    //      this is necessary for byte-equivalence on workspaces like
+    //      reth (`default-members = ["bin/reth"]`) and bevy (root
+    //      package `bevy` plus 87 sub-crates).
+    //   4. otherwise → format the package implicitly selected by
     //      `--manifest-path` (or cwd). For a virtual workspace with no
     //      implicit package, fall back to `workspace.default-members`.
+    let at_root = at_workspace_root(cfg, metadata.workspace_root.as_std_path());
     let selected: HashSet<&cargo_metadata::PackageId> = if cfg.all {
         workspace_members.clone()
     } else if !cfg.packages.is_empty() {
@@ -63,6 +71,8 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
             .filter(|p| workspace_members.contains(&p.id) && names.contains(p.name.as_str()))
             .map(|p| &p.id)
             .collect()
+    } else if at_root {
+        workspace_members.clone()
     } else if let Some(root) = metadata.root_package() {
         std::iter::once(&root.id).collect()
     } else {
@@ -154,4 +164,35 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
     }
 
     Ok(cache_opt)
+}
+
+/// True when the effective manifest path (`--manifest-path` if given,
+/// else the nearest `Cargo.toml` walking up from cwd) equals the
+/// workspace's root `Cargo.toml`. Mirrors `cargo-fmt`'s `in_workspace_root`
+/// flag, which it uses to expand the implicit selection to every member.
+fn at_workspace_root(cfg: &Config, ws_root: &std::path::Path) -> bool {
+    let ws_manifest = match ws_root.join("Cargo.toml").canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let effective = match &cfg.manifest_path {
+        Some(p) => p.canonicalize().ok(),
+        None => std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_manifest_upward(&cwd)),
+    };
+    effective.map(|m| m == ws_manifest).unwrap_or(false)
+}
+
+fn find_manifest_upward(start: &std::path::Path) -> Option<PathBuf> {
+    let mut p = start.canonicalize().ok()?;
+    loop {
+        let cand = p.join("Cargo.toml");
+        if cand.is_file() {
+            return cand.canonicalize().ok();
+        }
+        if !p.pop() {
+            return None;
+        }
+    }
 }
