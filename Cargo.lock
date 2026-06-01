@@ -71,6 +71,7 @@ dependencies = [
 name = "cargo-ff"
 version = "1.0.0"
 dependencies = [
+ "anstyle",
  "anyhow",
  "cargo_metadata",
  "clap",

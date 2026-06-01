@@ -5,7 +5,8 @@ use cargo_metadata::MetadataCommand;
 use crossbeam_channel::Sender;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Run the producer.
 ///
@@ -22,6 +23,7 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
         cmd.manifest_path(p);
     }
     let metadata = cmd.exec()?;
+    set_workspace_root(metadata.workspace_root.as_std_path());
 
     let mut cache_opt = cfg
         .experimental_cache
@@ -87,8 +89,15 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
     // contains `..` segments reaching into another crate's tree (e.g.
     // polkadot's `malus`). After canonicalization those files would be
     // claimed by multiple crates, possibly with different editions.
-    // First crate to claim a file wins.
-    let mut claimed: HashMap<PathBuf, String> = HashMap::new();
+    // First crate to claim a file wins. We also track the owner's
+    // manifest path + edition so the collision warning can render both
+    // claim sites with line numbers (rustc-style multi-span).
+    let mut claimed: HashMap<PathBuf, ClaimSite> = HashMap::new();
+    // Editions seen across selected crates. If more than one shows up,
+    // we emit a single multi-edition warning at the end (off by default
+    // — it's only an advisory). Common in long-lived workspaces with
+    // crates pinned to old editions.
+    let mut editions_seen: HashMap<Edition, String> = HashMap::new();
 
     for pkg in &metadata.packages {
         if !selected.contains(&pkg.id) {
@@ -102,6 +111,9 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
                     edition: year,
                     package: pkg.name.to_string(),
                 })?;
+        editions_seen
+            .entry(edition)
+            .or_insert_with(|| pkg.name.to_string());
         let manifest_dir: PathBuf = pkg
             .manifest_path
             .parent()
@@ -112,26 +124,23 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
                     pkg.manifest_path
                 )))
             })?;
-
         let mut entry_points: Vec<PathBuf> = Vec::new();
         for tgt in &pkg.targets {
             let raw = tgt.src_path.as_std_path().to_path_buf();
             let canon = raw.canonicalize().unwrap_or(raw);
+            let claimer = ClaimSite {
+                name: pkg.name.to_string(),
+                edition,
+                manifest_path: pkg.manifest_path.as_std_path().to_path_buf(),
+            };
             match claimed.entry(canon.clone()) {
                 std::collections::hash_map::Entry::Vacant(v) => {
-                    v.insert(pkg.name.to_string());
+                    v.insert(claimer);
                     entry_points.push(canon);
                 }
                 std::collections::hash_map::Entry::Occupied(o) => {
                     if cfg.warnings {
-                        let _ = writeln!(
-                            std::io::stderr(),
-                            "warning: crate `{}` claims `{}`, already owned by `{}`; using `{}`'s edition",
-                            pkg.name,
-                            canon.display(),
-                            o.get(),
-                            o.get(),
-                        );
+                        emit_claim_collision_warning(&canon, o.get(), &claimer);
                     }
                 }
             }
@@ -163,6 +172,10 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
         }
     }
 
+    if cfg.warnings && editions_seen.len() > 1 {
+        emit_multi_edition_warning(&editions_seen);
+    }
+
     Ok(cache_opt)
 }
 
@@ -170,7 +183,7 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
 /// else the nearest `Cargo.toml` walking up from cwd) equals the
 /// workspace's root `Cargo.toml`. Mirrors `cargo-fmt`'s `in_workspace_root`
 /// flag, which it uses to expand the implicit selection to every member.
-fn at_workspace_root(cfg: &Config, ws_root: &std::path::Path) -> bool {
+fn at_workspace_root(cfg: &Config, ws_root: &Path) -> bool {
     let ws_manifest = match ws_root.join("Cargo.toml").canonicalize() {
         Ok(p) => p,
         Err(_) => return false,
@@ -184,7 +197,7 @@ fn at_workspace_root(cfg: &Config, ws_root: &std::path::Path) -> bool {
     effective.map(|m| m == ws_manifest).unwrap_or(false)
 }
 
-fn find_manifest_upward(start: &std::path::Path) -> Option<PathBuf> {
+fn find_manifest_upward(start: &Path) -> Option<PathBuf> {
     let mut p = start.canonicalize().ok()?;
     loop {
         let cand = p.join("Cargo.toml");
@@ -195,4 +208,169 @@ fn find_manifest_upward(start: &std::path::Path) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Where a crate declared a target — captured so the collision warning
+/// can show both claim sites with line numbers in `Cargo.toml`.
+struct ClaimSite {
+    name: String,
+    edition: Edition,
+    manifest_path: PathBuf,
+}
+
+/// Workspace root captured at the start of `discover::run`, in both
+/// raw and canonicalized form. Used by warning emitters to display
+/// paths relative to the workspace root instead of as long absolutes.
+/// On macOS the two often differ (`/tmp` vs `/private/tmp`); cargo
+/// hands us raw paths but we canonicalize the file targets ourselves,
+/// so we strip against either.
+struct WsRoots {
+    raw: PathBuf,
+    canon: PathBuf,
+}
+
+static WS_ROOTS: OnceLock<WsRoots> = OnceLock::new();
+
+fn set_workspace_root(raw: &Path) {
+    let _ = WS_ROOTS.set(WsRoots {
+        raw: raw.to_path_buf(),
+        canon: raw.canonicalize().unwrap_or_else(|_| raw.to_path_buf()),
+    });
+}
+
+/// Strip the workspace-root prefix from `p` if possible, falling back
+/// to the absolute path when nothing matches.
+fn rel(p: &Path) -> &Path {
+    let Some(roots) = WS_ROOTS.get() else {
+        return p;
+    };
+    p.strip_prefix(&roots.raw)
+        .or_else(|_| p.strip_prefix(&roots.canon))
+        .unwrap_or(p)
+}
+
+fn emit_claim_collision_warning(canon: &Path, first: &ClaimSite, second: &ClaimSite) {
+    use std::fmt::Write as _;
+    let p = crate::style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (f, fr) = (p.frame.render(), p.frame.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{w}warning{wr}: file `{}` claimed by multiple crates",
+        rel(canon).display()
+    );
+    // Primary span: the first crate's Cargo.toml entry. Caret label
+    // names the owning crate so readers know which side wins.
+    render_claim_span(
+        &mut buf,
+        canon,
+        first,
+        &format!("first claim (`{}`)", first.name),
+    );
+    // Secondary span as a `note:` — rustc convention for additional
+    // related code locations.
+    let _ = writeln!(buf, "{n}note{nr}: also claimed here (`{}`)", second.name);
+    render_claim_span(&mut buf, canon, second, "");
+    if first.edition != second.edition {
+        let _ = writeln!(
+            buf,
+            "   {f}={fr} {n}note{nr}: editions differ — using `{}`'s {} over `{}`'s {}",
+            first.name,
+            first.edition.as_str(),
+            second.name,
+            second.edition.as_str()
+        );
+    }
+    buf.push('\n');
+    let _ = std::io::stderr().write_all(buf.as_bytes());
+}
+
+/// Render one claim site as a span with file:line:col header, source
+/// line, and caret-row pointer. `caret_label` is appended after the
+/// carets when non-empty (rustc's "label" style). Falls back to a
+/// file-only line when the source line can't be located.
+fn render_claim_span(buf: &mut String, canon: &Path, site: &ClaimSite, caret_label: &str) {
+    use std::fmt::Write as _;
+    let p = crate::style::palette();
+    let (f, fr) = (p.frame.render(), p.frame.render_reset());
+
+    if let Some((line_no, line_text)) = find_target_path_line(&site.manifest_path, canon) {
+        let pad = line_no.to_string().len();
+        let blank = " ".repeat(pad);
+        let body = line_text.trim_end();
+        let _ = writeln!(
+            buf,
+            " {blank}{f}-->{fr} {}:{line_no}:1",
+            rel(&site.manifest_path).display()
+        );
+        let _ = writeln!(buf, " {blank} {f}|{fr}");
+        let _ = writeln!(buf, " {f}{line_no} |{fr} {body}");
+        if caret_label.is_empty() {
+            let _ = writeln!(buf, " {blank} {f}| {}{fr}", "^".repeat(body.len()));
+        } else {
+            let _ = writeln!(
+                buf,
+                " {blank} {f}| {} {caret_label}{fr}",
+                "^".repeat(body.len())
+            );
+        }
+    } else {
+        let _ = writeln!(buf, "  {f}-->{fr} {}", rel(&site.manifest_path).display());
+    }
+}
+
+fn emit_multi_edition_warning(seen: &HashMap<Edition, String>) {
+    use std::fmt::Write as _;
+    let p = crate::style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+    let mut summary: Vec<(Edition, &String)> = seen.iter().map(|(e, n)| (*e, n)).collect();
+    summary.sort_by_key(|(e, _)| e.as_str());
+    let parts: Vec<String> = summary
+        .iter()
+        .map(|(e, n)| format!("{} (e.g. `{n}`)", e.as_str()))
+        .collect();
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{w}warning{wr}: workspace mixes {} editions",
+        summary.len()
+    );
+    let _ = writeln!(buf, "   {n}note{nr}: {}", parts.join(", "));
+    let _ = writeln!(
+        buf,
+        "   {n}note{nr}: rustfmt parses each crate per its own edition, so reserved-keyword identifiers may format differently across the boundary"
+    );
+    buf.push('\n');
+    let _ = std::io::stderr().write_all(buf.as_bytes());
+}
+
+/// Scan a Cargo.toml line-by-line for a `path = "..."` whose value
+/// resolves to `target_canon`. Best-effort diagnostic helper — not a
+/// real TOML parser, just close enough for cargo target tables.
+fn find_target_path_line(manifest_path: &Path, target_canon: &Path) -> Option<(usize, String)> {
+    let manifest_dir = manifest_path.parent()?;
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    for (idx, line) in content.lines().enumerate() {
+        let Some(quoted) = extract_path_string(line) else {
+            continue;
+        };
+        let resolved = manifest_dir.join(quoted).canonicalize().ok();
+        if resolved.as_deref() == Some(target_canon) {
+            return Some((idx + 1, line.to_string()));
+        }
+    }
+    None
+}
+
+fn extract_path_string(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("path")?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
 }

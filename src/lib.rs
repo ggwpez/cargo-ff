@@ -7,6 +7,7 @@ mod dispatch;
 mod exec;
 mod report;
 mod size;
+mod style;
 
 #[cfg(feature = "cli")]
 pub mod cli;
@@ -104,7 +105,8 @@ fn join_void(h: JoinHandle<()>, name: &'static str) -> Result<()> {
 /// `nightly` marker is absent, unstable `rustfmt.toml` options are silently
 /// dropped and output diverges from `cargo +nightly fmt`.
 fn warn_if_stable_rustfmt() {
-    use std::io::Write;
+    use std::fmt::Write as _;
+    use std::io::Write as _;
     let Ok(out) = std::process::Command::new("rustfmt")
         .arg("--version")
         .output()
@@ -115,13 +117,24 @@ fn warn_if_stable_rustfmt() {
         return;
     }
     let v = String::from_utf8_lossy(&out.stdout);
-    if !v.contains("nightly") {
-        let _ = writeln!(
-            std::io::stderr(),
-            "warning: rustfmt on PATH appears to be the stable channel ({}); \
-             unstable rustfmt.toml options will be silently ignored. \
-             Run via `cargo +nightly ff` for parity with `cargo +nightly fmt`.",
-            v.trim(),
-        );
+    if v.contains("nightly") {
+        return;
     }
+    let p = style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+    let (h, hr) = (p.help.render(), p.help.render_reset());
+    let mut buf = String::new();
+    let _ = writeln!(buf, "{w}warning{wr}: rustfmt on PATH is the stable channel");
+    let _ = writeln!(buf, "   {n}note{nr}: `{}`", v.trim());
+    let _ = writeln!(
+        buf,
+        "   {n}note{nr}: unstable rustfmt.toml options will be silently ignored"
+    );
+    let _ = writeln!(
+        buf,
+        "   {h}help{hr}: run via `cargo +nightly ff` for parity with `cargo +nightly fmt`"
+    );
+    buf.push('\n');
+    let _ = std::io::stderr().write_all(buf.as_bytes());
 }
