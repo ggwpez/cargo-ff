@@ -23,7 +23,8 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
         cmd.manifest_path(p);
     }
     let metadata = cmd.exec()?;
-    set_workspace_root(metadata.workspace_root.as_std_path());
+    let ws_root = metadata.workspace_root.as_std_path().to_path_buf();
+    set_workspace_root(&ws_root);
 
     let mut cache_opt = cfg
         .experimental_cache
@@ -98,6 +99,13 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
     // — it's only an advisory). Common in long-lived workspaces with
     // crates pinned to old editions.
     let mut editions_seen: HashMap<Edition, String> = HashMap::new();
+    // Per-crate rustfmt config governance: nearest rustfmt.toml (walking
+    // up to the workspace root) for each selected crate. Lets us flag
+    // crate-level configs that shadow the workspace one.
+    let mut governed: HashMap<PathBuf, Vec<(String, Edition)>> = HashMap::new();
+    // Crates whose Cargo.toml has no `edition` key — cargo defaults them
+    // to 2015, which is almost always unintended in a modern workspace.
+    let mut implicit_2015: Vec<String> = Vec::new();
 
     for pkg in &metadata.packages {
         if !selected.contains(&pkg.id) {
@@ -124,6 +132,20 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
                     pkg.manifest_path
                 )))
             })?;
+        if cfg.warnings
+            && let Some(cfg_file) = find_nearest_config(&manifest_dir, &ws_root)
+        {
+            governed
+                .entry(cfg_file)
+                .or_default()
+                .push((pkg.name.to_string(), edition));
+        }
+        if cfg.warnings
+            && edition == Edition::E2015
+            && !cargo_toml_declares_edition(pkg.manifest_path.as_std_path())
+        {
+            implicit_2015.push(pkg.name.to_string());
+        }
         let mut entry_points: Vec<PathBuf> = Vec::new();
         for tgt in &pkg.targets {
             let raw = tgt.src_path.as_std_path().to_path_buf();
@@ -174,6 +196,11 @@ pub(crate) fn run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<Option<cache::C
 
     if cfg.warnings && editions_seen.len() > 1 {
         emit_multi_edition_warning(&editions_seen);
+    }
+    if cfg.warnings {
+        emit_shadow_config_warning(&governed, &ws_root);
+        emit_config_edition_warning(&governed);
+        emit_implicit_edition_warning(&implicit_2015);
     }
 
     Ok(cache_opt)
@@ -373,4 +400,202 @@ fn extract_path_string(line: &str) -> Option<&str> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(&rest[..end])
+}
+
+/// Walk up from `start` (inclusive) to `root` (inclusive) looking for a
+/// rustfmt config. rustfmt resolves config per file by walking up from
+/// the file's directory and uses the nearest one it finds. Lookup order
+/// (`.rustfmt.toml` then `rustfmt.toml`) matches `cache::compute_tool_hash`.
+fn find_nearest_config(start: &Path, root: &Path) -> Option<PathBuf> {
+    let mut dir = start;
+    loop {
+        for name in [".rustfmt.toml", "rustfmt.toml"] {
+            let cand = dir.join(name);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+        if dir == root {
+            return None;
+        }
+        dir = dir.parent()?;
+    }
+}
+
+/// A `rustfmt.toml` sitting below the workspace root silently overrides
+/// the workspace config for its subtree (rustfmt resolves config per
+/// file). Surface those so a stray sub-config isn't mistaken for the
+/// workspace one. No-op when nothing below the root claims a crate.
+fn emit_shadow_config_warning(governed: &HashMap<PathBuf, Vec<(String, Edition)>>, ws_root: &Path) {
+    use std::fmt::Write as _;
+    let mut shadows: Vec<(&PathBuf, &Vec<(String, Edition)>)> = governed
+        .iter()
+        .filter(|(cfg, _)| cfg.parent() != Some(ws_root))
+        .collect();
+    if shadows.is_empty() {
+        return;
+    }
+    shadows.sort_by(|a, b| a.0.cmp(b.0));
+
+    let p = crate::style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+    let n_files = shadows.len();
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{w}warning{wr}: {n_files} nested rustfmt.toml file{} shadow{} the workspace config",
+        if n_files == 1 { "" } else { "s" },
+        if n_files == 1 { "s" } else { "" },
+    );
+    for (cfg, crates) in &shadows {
+        let mut names: Vec<&str> = crates.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        let joined = names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(buf, "   {n}note{nr}: `{}` governs {joined}", rel(cfg).display());
+    }
+    let _ = writeln!(
+        buf,
+        "   {n}note{nr}: rustfmt resolves config per file (walking up from each path), so these crates ignore the workspace-root rustfmt.toml"
+    );
+    buf.push('\n');
+    let _ = std::io::stderr().write_all(buf.as_bytes());
+}
+
+/// `cargo ff` always passes `--edition` (from each crate's Cargo.toml,
+/// see `exec::format_batch`), which overrides any `edition` in a
+/// rustfmt.toml. That key is silently ineffective here but still applies
+/// to a bare `rustfmt` run, so the two can disagree. Warn per config
+/// whose declared edition differs from a crate it governs.
+fn emit_config_edition_warning(governed: &HashMap<PathBuf, Vec<(String, Edition)>>) {
+    use std::fmt::Write as _;
+    let mut configs: Vec<(&PathBuf, &Vec<(String, Edition)>)> = governed.iter().collect();
+    configs.sort_by(|a, b| a.0.cmp(b.0));
+
+    let p = crate::style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+
+    let mut buf = String::new();
+    for (cfg, crates) in configs {
+        let Some(cfg_edition) = std::fs::read_to_string(cfg)
+            .ok()
+            .and_then(|c| extract_toml_edition(&c))
+        else {
+            continue;
+        };
+        // Representative crate whose Cargo.toml edition differs — that's
+        // the one `--edition` will silently win over.
+        let mut mismatched: Vec<&(String, Edition)> = crates
+            .iter()
+            .filter(|(_, e)| e.as_str() != cfg_edition)
+            .collect();
+        if mismatched.is_empty() {
+            continue;
+        }
+        mismatched.sort_by(|a, b| a.0.cmp(&b.0));
+        let (name, ed) = mismatched[0];
+        let _ = writeln!(
+            buf,
+            "{w}warning{wr}: `{}` sets `edition = \"{cfg_edition}\"`, which cargo ff overrides",
+            rel(cfg).display()
+        );
+        let _ = writeln!(
+            buf,
+            "   {n}note{nr}: cargo ff passes `--edition` from each crate's Cargo.toml (e.g. `{name}` is edition {})",
+            ed.as_str()
+        );
+        let _ = writeln!(
+            buf,
+            "   {n}note{nr}: the rustfmt.toml `edition` still applies to a bare `rustfmt` run, so output can diverge from cargo ff / cargo fmt"
+        );
+        buf.push('\n');
+    }
+    if !buf.is_empty() {
+        let _ = std::io::stderr().write_all(buf.as_bytes());
+    }
+}
+
+/// Crates with no `edition` key default to 2015 — almost always a
+/// mistake in a modern workspace, and 2015 formats differently (e.g.
+/// `dyn`/`async`/`try` aren't reserved). Aggregate them into one warning.
+fn emit_implicit_edition_warning(names: &[String]) {
+    use std::fmt::Write as _;
+    if names.is_empty() {
+        return;
+    }
+    let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
+    names.sort_unstable();
+
+    let p = crate::style::palette();
+    let (w, wr) = (p.warning.render(), p.warning.render_reset());
+    let (n, nr) = (p.note.render(), p.note.render_reset());
+    let (h, hr) = (p.help.render(), p.help.render_reset());
+
+    let count = names.len();
+    let joined = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{w}warning{wr}: {count} crate{} default{} to edition 2015 (no `edition` in Cargo.toml)",
+        if count == 1 { "" } else { "s" },
+        if count == 1 { "s" } else { "" },
+    );
+    let _ = writeln!(buf, "   {n}note{nr}: {joined}");
+    let _ = writeln!(
+        buf,
+        "   {h}help{hr}: add `edition = \"2021\"` (or another) to each Cargo.toml — 2015 formats differently from later editions"
+    );
+    buf.push('\n');
+    let _ = std::io::stderr().write_all(buf.as_bytes());
+}
+
+/// True if `manifest_path` declares an `edition` key — an explicit value
+/// or `edition.workspace = true`. When absent, cargo defaults to 2015.
+/// On read failure we assume it's declared, to avoid a false warning.
+/// Best-effort line scan, like the other Cargo.toml helpers here.
+fn cargo_toml_declares_edition(manifest_path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(manifest_path) else {
+        return true;
+    };
+    content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("edition") else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        rest.starts_with('=') || rest.starts_with('.')
+    })
+}
+
+/// Best-effort scan for a top-level `edition = "..."` in a rustfmt.toml.
+/// Not a real TOML parser — rustfmt.toml is flat, so a line scan suffices.
+fn extract_toml_edition(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("edition") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        return Some(rest[..end].to_string());
+    }
+    None
 }
