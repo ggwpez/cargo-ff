@@ -14,12 +14,20 @@ pub mod cli;
 
 pub use types::{Config, Edition, Error, FileFailure, Report, Result};
 
+/// Internal test surface — **not** part of the public API despite being `pub`.
+///
+/// Rust integration tests compile as a separate crate, so exercising a private
+/// module like [`discover`](crate::discover) from `tests/` needs a `pub`
+/// escape hatch. The `__` prefix plus `#[doc(hidden)]` keep it out of the docs
+/// and signal "do not use": it carries no stability guarantee and may change
+/// or disappear in any release. This is the conventional idiom for
+/// integration-testing crate internals.
 #[doc(hidden)]
 pub mod __test_only {
     use crate::types::{Config, CrateUnit, Result};
     use crossbeam_channel::Sender;
 
-    pub fn discover_run(cfg: &Config, tx: Sender<CrateUnit>) -> Result<()> {
+    pub fn discover_run(cfg: &Config, tx: &Sender<CrateUnit>) -> Result<()> {
         crate::discover::run(cfg, tx).map(drop)
     }
 }
@@ -28,6 +36,14 @@ use crossbeam_channel::bounded;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
+/// Format every selected crate in the workspace, dispatching rustfmt across a
+/// pool of worker threads, and return the aggregated [`Report`].
+///
+/// # Errors
+///
+/// Returns [`Error`] when `cargo metadata` fails, a requested package or
+/// edition is unknown, `cfg.workers` is `Some(0)`, or a producer/worker thread
+/// panics.
 pub fn run(cfg: &Config) -> Result<Report> {
     if matches!(cfg.workers, Some(0)) {
         return Err(Error::InvalidWorkers(0));
@@ -39,7 +55,7 @@ pub fn run(cfg: &Config) -> Result<Report> {
 
     let n = cfg
         .workers
-        .or_else(|| thread::available_parallelism().ok().map(|p| p.get()))
+        .or_else(|| thread::available_parallelism().ok().map(std::num::NonZeroUsize::get))
         .unwrap_or(1);
     let cap = cfg.channel_capacity.unwrap_or(512);
     let batch_size = cfg.batch_size.unwrap_or(3);
@@ -53,15 +69,22 @@ pub fn run(cfg: &Config) -> Result<Report> {
     let (result_tx, result_rx) = bounded::<types::BatchResult>(cap);
 
     let cfg_d = cfg.clone();
-    let producer = thread::spawn(move || discover::run(&cfg_d, unit_tx));
+    // Each thread owns its channel endpoint; dropping it when the closure
+    // exits is what propagates "no more work" down the pipeline.
+    let producer = thread::spawn(move || discover::run(&cfg_d, &unit_tx));
 
     // Coalescer pushes batches into `queue`; closes it on exit so
     // workers' `pop()` returns `None` once everything is drained.
     let coalescer_q = queue.clone();
     let coalescer = thread::spawn(move || {
-        let r = coalesce::run(unit_rx, &coalescer_q, batch_size, 4, solo_threshold);
+        coalesce::run(
+            &unit_rx,
+            &coalescer_q,
+            batch_size,
+            coalesce::DEFAULT_PACK_MULTIPLIER,
+            solo_threshold,
+        );
         coalescer_q.close();
-        r
     });
 
     let mut workers = Vec::with_capacity(n);
@@ -69,14 +92,14 @@ pub fn run(cfg: &Config) -> Result<Report> {
         let q = queue.clone();
         let tx = result_tx.clone();
         let cfg_w = cfg.clone();
-        workers.push(thread::spawn(move || exec::worker(q, tx, &cfg_w)));
+        workers.push(thread::spawn(move || exec::worker(&q, &tx, &cfg_w)));
     }
     drop(result_tx);
 
     let report = report::aggregate(result_rx);
 
     let cache_opt = join_fallible(producer, "producer")?;
-    join_fallible(coalescer, "coalescer")?;
+    join_void(coalescer, "coalescer")?;
     for w in workers {
         join_void(w, "worker")?;
     }
@@ -116,17 +139,17 @@ fn warn_if_stable_rustfmt() {
     if !out.status.success() {
         return;
     }
-    let v = String::from_utf8_lossy(&out.stdout);
-    if v.contains("nightly") {
+    let version = String::from_utf8_lossy(&out.stdout);
+    if version.contains("nightly") {
         return;
     }
-    let p = style::palette();
-    let (w, wr) = (p.warning.render(), p.warning.render_reset());
-    let (n, nr) = (p.note.render(), p.note.render_reset());
-    let (h, hr) = (p.help.render(), p.help.render_reset());
+    let palette = style::palette();
+    let (w, wr) = (palette.warning.render(), palette.warning.render_reset());
+    let (n, nr) = (palette.note.render(), palette.note.render_reset());
+    let (h, hr) = (palette.help.render(), palette.help.render_reset());
     let mut buf = String::new();
     let _ = writeln!(buf, "{w}warning{wr}: rustfmt on PATH is the stable channel");
-    let _ = writeln!(buf, "   {n}note{nr}: `{}`", v.trim());
+    let _ = writeln!(buf, "   {n}note{nr}: `{}`", version.trim());
     let _ = writeln!(
         buf,
         "   {n}note{nr}: unstable rustfmt.toml options will be silently ignored"

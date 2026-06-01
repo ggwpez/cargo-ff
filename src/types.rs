@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Edition {
     E2015,
     E2018,
@@ -9,12 +10,13 @@ pub enum Edition {
 }
 
 impl Edition {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Edition::E2015 => "2015",
-            Edition::E2018 => "2018",
-            Edition::E2021 => "2021",
-            Edition::E2024 => "2024",
+            Self::E2015 => "2015",
+            Self::E2018 => "2018",
+            Self::E2021 => "2021",
+            Self::E2024 => "2024",
         }
     }
 }
@@ -23,10 +25,10 @@ impl std::str::FromStr for Edition {
     type Err = UnknownEdition;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s {
-            "2015" => Edition::E2015,
-            "2018" => Edition::E2018,
-            "2021" => Edition::E2021,
-            "2024" => Edition::E2024,
+            "2015" => Self::E2015,
+            "2018" => Self::E2018,
+            "2021" => Self::E2021,
+            "2024" => Self::E2024,
             other => return Err(UnknownEdition(other.to_owned())),
         })
     }
@@ -43,9 +45,11 @@ impl TryFrom<cargo_metadata::Edition> for Edition {
 /// here. Caller wraps with package context before surfacing.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("unknown edition: {0}")]
+#[non_exhaustive]
 pub struct UnknownEdition(pub String);
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CrateUnit {
     pub edition: Edition,
     pub manifest_dir: PathBuf,
@@ -58,25 +62,31 @@ pub struct CrateUnit {
     pub size_bytes: u64,
 }
 
-/// One rustfmt invocation's worth of work: a homogeneous-edition group of
-/// crates whose entry-point files are passed together to a single rustfmt
-/// process. With batch_size=1 this is equivalent to per-crate dispatch.
+/// One rustfmt invocation's worth of work.
+///
+/// A homogeneous-edition group of crates whose entry-point files are passed
+/// together to a single rustfmt process. With `batch_size` = 1 this is
+/// equivalent to per-crate dispatch.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Batch {
     pub edition: Edition,
     pub units: Vec<CrateUnit>,
 }
 
 impl Batch {
+    #[must_use]
     pub fn size_bytes(&self) -> u64 {
         self.units.iter().map(|u| u.size_bytes).sum()
     }
 
+    #[must_use]
     pub fn file_count(&self) -> usize {
         self.units.iter().map(|u| u.files.len()).sum()
     }
 
     /// Sort key for deterministic output ordering: lex-min of manifest dirs.
+    #[must_use]
     pub fn sort_key(&self) -> PathBuf {
         self.units
             .iter()
@@ -86,19 +96,33 @@ impl Batch {
     }
 }
 
+/// One formatted file paired with the `manifest_dir` of the crate that owns
+/// it, so the aggregator can attribute a `--check` failure back to its crate.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct BatchFile {
+    pub file: PathBuf,
+    pub manifest_dir: PathBuf,
+}
+
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct BatchResult {
     pub sort_key: PathBuf,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: i32,
-    /// All files in the batch, with the manifest_dir they came from.
-    /// Used by the aggregator to attribute `--check` failures back to
-    /// individual crates.
-    pub files: Vec<(PathBuf, PathBuf)>,
+    /// Every file in the batch with the crate it came from. Used by the
+    /// aggregator to attribute `--check` failures back to individual crates.
+    pub files: Vec<BatchFile>,
 }
 
+// Each bool mirrors an independent `cargo fmt` CLI flag. Folding them into
+// nested option structs (as clippy::struct_excessive_bools suggests) would add
+// ceremony without making the flat, flag-per-field mapping any clearer.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct Config {
     pub manifest_path: Option<PathBuf>,
     pub packages: Vec<String>,
@@ -128,18 +152,21 @@ pub struct Config {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Report {
     pub failures: Vec<FileFailure>,
     pub exit_code: i32,
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct FileFailure {
     pub file: PathBuf,
     pub manifest_dir: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("`workers` must be >= 1 (got {0})")]
     InvalidWorkers(usize),

@@ -12,6 +12,12 @@
 //! relative to formatting time, and the simplicity is worth more than
 //! lock-free trickery.
 
+// Every `lock()`/`wait()` below unwraps with `expect`: a poisoned queue mutex
+// means a worker panicked while holding it, so the heap may be torn. Failing
+// fast is the only correct response — recovering the guard would risk
+// corrupting dispatch order.
+#![allow(clippy::expect_used)]
+
 use crate::types::Batch;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -55,7 +61,7 @@ impl Ord for Item {
 
 impl PriorityQueue {
     pub(crate) fn new() -> Self {
-        PriorityQueue {
+        Self {
             inner: Mutex::new(Inner {
                 heap: BinaryHeap::new(),
                 closed: false,

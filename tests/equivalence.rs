@@ -12,6 +12,11 @@
 //! This is the strong correctness test. Any divergence is a routing bug
 //! in our discovery (wrong edition, missed file, double-formatted file).
 
+// Tests assert by panicking: unwrap/expect/panic are the idiomatic way to fail
+// a test loudly, so the restriction lints that forbid them in library code do
+// not apply here.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,14 +26,12 @@ fn git(repo: &Path, args: &[&str]) -> std::process::Output {
         .current_dir(repo)
         .output()
         .expect("git invocation failed");
-    if !out.status.success() {
-        panic!(
-            "git {:?} failed: {}\n{}",
-            args,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        );
-    }
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
     out
 }
 
@@ -91,7 +94,7 @@ fn dirty_tree(repo: &Path) -> Vec<PathBuf> {
         .expect("find failed");
     let body = String::from_utf8_lossy(&out.stdout);
     let mut paths: Vec<&str> = body.lines().filter(|l| l.contains("/src/lib.rs")).collect();
-    paths.sort();
+    paths.sort_unstable();
     paths.truncate(20);
 
     for rel in paths {
@@ -375,7 +378,7 @@ fn snapshot_fingerprints(repo: &Path) -> std::collections::BTreeMap<PathBuf, Fil
         .output()
         .expect("find failed");
     for rel in String::from_utf8_lossy(&walk.stdout).lines() {
-        if !rel.ends_with(".rs") {
+        if Path::new(rel).extension() != Some(std::ffi::OsStr::new("rs")) {
             continue;
         }
         let p = repo.join(rel.trim_start_matches("./"));
@@ -387,15 +390,13 @@ fn snapshot_fingerprints(repo: &Path) -> std::collections::BTreeMap<PathBuf, Fil
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs FF_BIG_REPO pointing at a large external workspace"]
 fn equivalence_on_big_repo() {
-    let path = match std::env::var("FF_BIG_REPO") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => {
-            eprintln!("FF_BIG_REPO not set; skipping");
-            return;
-        }
+    let Ok(path) = std::env::var("FF_BIG_REPO") else {
+        eprintln!("FF_BIG_REPO not set; skipping");
+        return;
     };
+    let path = PathBuf::from(path);
     assert_clean(&path);
     let toolchain = std::env::var("FF_TOOLCHAIN").ok();
     let tag = toolchain.as_deref().unwrap_or("default");
@@ -407,14 +408,14 @@ fn equivalence_on_big_repo() {
 /// on stable rustfmt — silently-dropped unstable options, edition
 /// handling, etc.
 #[test]
-#[ignore]
+#[ignore = "spawns cargo fmt + git worktree subprocesses; run explicitly"]
 fn equivalence_on_self_default() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     run_equivalence(&path, None, "default");
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires the nightly toolchain and spawns subprocesses; run explicitly"]
 fn equivalence_on_self_nightly() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     run_equivalence(&path, Some("nightly"), "nightly");

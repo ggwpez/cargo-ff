@@ -2,7 +2,7 @@
 //!
 //! Plays no role in correctness — rustfmt produces the same output
 //! regardless of which strategy we pick. Only the *relative* magnitudes
-//! between crates matter, since the coalescer uses size_bytes to balance
+//! between crates matter, since the coalescer uses `size_bytes` to balance
 //! batches. Strategies trade discovery cost for accuracy.
 
 use std::path::Path;
@@ -26,23 +26,12 @@ pub(crate) fn estimate(manifest_dir: &Path) -> u64 {
     manifest_dir_rs_bytes_clamped(manifest_dir, HUGE_CUTOFF_BYTES)
 }
 
-/// Sum of bytes of every `*.rs` file under `manifest_dir`, skipping
-/// `target/`. Closer to what rustfmt actually parses (it walks `mod`
-/// declarations from entry points and reads the same files we'd
-/// enumerate here, modulo `#[path]` and excluded modules). Costs one
-/// walkdir per crate during discovery — for 580 crates with ~10 files
-/// each, on the order of 50ms total.
-#[allow(dead_code)]
-pub(crate) fn manifest_dir_rs_bytes(manifest_dir: &Path) -> u64 {
-    manifest_dir_rs_bytes_clamped(manifest_dir, u64::MAX)
-}
-
 /// Sum of `*.rs` bytes under `manifest_dir`, returning early once the
 /// running total reaches `cap` (returning `cap`). Skips `target/` and
 /// non-files. Lets us stop walking after a crate is classified as
 /// giant, instead of fully enumerating multi-MB trees we'll only use
 /// for one bit of "is this huge?" information.
-pub(crate) fn manifest_dir_rs_bytes_clamped(manifest_dir: &Path, cap: u64) -> u64 {
+fn manifest_dir_rs_bytes_clamped(manifest_dir: &Path, cap: u64) -> u64 {
     let mut total: u64 = 0;
     let walker = walkdir::WalkDir::new(manifest_dir)
         .follow_links(false)
@@ -53,7 +42,7 @@ pub(crate) fn manifest_dir_rs_bytes_clamped(manifest_dir: &Path, cap: u64) -> u6
         if !entry.file_type().is_file() {
             continue;
         }
-        if entry.path().extension().map(|x| x != "rs").unwrap_or(true) {
+        if entry.path().extension().is_none_or(|x| x != "rs") {
             continue;
         }
         if let Ok(m) = entry.metadata() {
@@ -64,4 +53,50 @@ pub(crate) fn manifest_dir_rs_bytes_clamped(manifest_dir: &Path, cap: u64) -> u6
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests assert by panicking; `unwrap` is the idiomatic way to fail loudly.
+    #![allow(clippy::unwrap_used)]
+
+    use super::{HUGE_CUTOFF_BYTES, estimate, manifest_dir_rs_bytes_clamped};
+    use std::path::PathBuf;
+
+    fn unique_tmp(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn estimate_sums_rs_bytes_and_ignores_other_files() {
+        let dir = unique_tmp("ff-size-sum");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), vec![b'x'; 100]).unwrap();
+        std::fs::write(dir.join("b.rs"), vec![b'y'; 50]).unwrap();
+        std::fs::write(dir.join("notes.txt"), vec![b'z'; 9999]).unwrap();
+
+        let bytes = estimate(&dir);
+        assert_eq!(bytes, 150, "only the two .rs files count");
+        assert!(bytes < HUGE_CUTOFF_BYTES);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clamping_returns_the_cap_verbatim_once_reached() {
+        let dir = unique_tmp("ff-size-clamp");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), vec![b'x'; 1000]).unwrap();
+        std::fs::write(dir.join("b.rs"), vec![b'y'; 1000]).unwrap();
+
+        // A cap below the total is hit mid-walk and returned exactly — this is
+        // the "giant" classifier the coalescer's solo-dispatch check relies on.
+        assert_eq!(manifest_dir_rs_bytes_clamped(&dir, 500), 500);
+        // A cap above the total yields the true sum.
+        assert_eq!(manifest_dir_rs_bytes_clamped(&dir, 10_000), 2000);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

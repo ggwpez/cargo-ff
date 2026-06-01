@@ -1,11 +1,13 @@
 use crate::dispatch::PriorityQueue;
-use crate::types::{Batch, BatchResult, Config};
+use crate::types::{Batch, BatchFile, BatchResult, Config};
 use crossbeam_channel::Sender;
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 
-pub(crate) fn worker(queue: Arc<PriorityQueue>, tx: Sender<BatchResult>, cfg: &Config) {
+/// Pull batches off the shared queue and format each, forwarding results until
+/// the queue closes. The spawning thread owns the `Arc<PriorityQueue>` and
+/// `Sender` clones it passes here; they drop when that closure exits, which is
+/// what eventually closes the result channel for the aggregator.
+pub(crate) fn worker(queue: &PriorityQueue, tx: &Sender<BatchResult>, cfg: &Config) {
     while let Some(batch) = queue.pop() {
         let result = format_batch(&batch, cfg);
         if tx.send(result).is_err() {
@@ -16,10 +18,13 @@ pub(crate) fn worker(queue: Arc<PriorityQueue>, tx: Sender<BatchResult>, cfg: &C
 
 fn format_batch(batch: &Batch, cfg: &Config) -> BatchResult {
     let sort_key = batch.sort_key();
-    let mut files: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(batch.file_count());
+    let mut files: Vec<BatchFile> = Vec::with_capacity(batch.file_count());
     for unit in &batch.units {
         for f in &unit.files {
-            files.push((f.clone(), unit.manifest_dir.clone()));
+            files.push(BatchFile {
+                file: f.clone(),
+                manifest_dir: unit.manifest_dir.clone(),
+            });
         }
     }
 

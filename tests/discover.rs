@@ -5,6 +5,11 @@
 //! tests/it.rs, …), not every .rs file. rustfmt walks the `mod` tree
 //! from each entry point itself.
 
+// Tests assert by panicking: unwrap/expect/panic are the idiomatic way to fail
+// a test loudly, so the restriction lints that forbid them in library code do
+// not apply here.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use cargo_ff::Config;
 use cargo_ff::types::CrateUnit;
 use crossbeam_channel::bounded;
@@ -15,7 +20,7 @@ fn drain_discover(cfg: &Config) -> (Vec<CrateUnit>, Vec<u128>) {
     let (tx, rx) = bounded::<CrateUnit>(64);
     let cfg_d = cfg.clone();
     let start = Instant::now();
-    let producer = std::thread::spawn(move || cargo_ff::__test_only::discover_run(&cfg_d, tx));
+    let producer = std::thread::spawn(move || cargo_ff::__test_only::discover_run(&cfg_d, &tx));
 
     let mut units = Vec::new();
     let mut send_times = Vec::new();
@@ -42,19 +47,15 @@ fn discover_runs_on_self() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs FF_BIG_REPO pointing at a large external workspace"]
 fn discover_on_big_repo() {
-    let path = match std::env::var("FF_BIG_REPO") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => {
-            eprintln!("FF_BIG_REPO not set; skipping");
-            return;
-        }
+    let Ok(path) = std::env::var("FF_BIG_REPO") else {
+        eprintln!("FF_BIG_REPO not set; skipping");
+        return;
     };
-    let cfg = Config {
-        manifest_path: Some(path.join("Cargo.toml")),
-        ..Config::default()
-    };
+    let path = PathBuf::from(path);
+    let mut cfg = Config::default();
+    cfg.manifest_path = Some(path.join("Cargo.toml"));
     let (units, send_times) = drain_discover(&cfg);
     let total_entries: usize = units.iter().map(|u| u.files.len()).sum();
     let unique_entries: std::collections::HashSet<&std::path::PathBuf> =

@@ -10,6 +10,7 @@ use std::path::PathBuf;
     about = "Fast Format is a fast drop-in replacement for cargo fmt",
     version
 )]
+#[non_exhaustive]
 pub struct Cli {
     /// Run rustfmt in --check mode (exit non-zero if any file would change).
     #[arg(long)]
@@ -40,8 +41,9 @@ pub struct Cli {
 /// cargo-ff-specific flags. All long names are prefixed `--ff-*` so they
 /// can never collide with a flag added upstream by `cargo fmt`.
 #[derive(Debug, Args)]
+#[non_exhaustive]
 pub struct FfArgs {
-    /// Number of worker threads. Defaults to available_parallelism().
+    /// Number of worker threads. Defaults to `available_parallelism()`.
     #[arg(long = "ff-workers")]
     pub workers: Option<NonZeroUsize>,
 
@@ -67,12 +69,13 @@ pub struct FfArgs {
 
 impl Cli {
     /// Parse argv, stripping the cargo-subcommand `argv[1] == "ff"` if present.
+    #[must_use]
     pub fn parse_argv() -> Self {
         let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
         if args.len() >= 2 && args[1] == "ff" {
             args.remove(1);
         }
-        Cli::parse_from(args)
+        Self::parse_from(args)
     }
 
     pub fn into_config(self) -> Config {

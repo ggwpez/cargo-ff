@@ -1,2 +1,5 @@
 /target
 /cargo-ffmt-design.md
+/.desloppify/
+/venv/
+/scorecard.png

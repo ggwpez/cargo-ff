@@ -14,6 +14,7 @@
 //! Salting: rustfmt --version output and workspace-root rustfmt config
 //! files are hashed into a header; any mismatch on load → cache empty.
 
+use crate::size;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -23,7 +24,7 @@ use std::time::UNIX_EPOCH;
 
 const VERSION_TAG: &str = "ff-cache-v3";
 
-/// Sorted file → mtime (ns since epoch). BTreeMap so equality is structural
+/// Sorted file → mtime (ns since epoch). `BTreeMap` so equality is structural
 /// and serialization is deterministic.
 pub(crate) type Fingerprint = BTreeMap<PathBuf, u128>;
 
@@ -90,7 +91,7 @@ impl Cache {
                     if fs_.contains('\t') || fs_.contains('\n') {
                         continue;
                     }
-                    writeln!(w, "{}\t{}\t{}", ds, fs_, mtime)?;
+                    writeln!(w, "{ds}\t{fs_}\t{mtime}")?;
                 }
             }
         }
@@ -98,11 +99,21 @@ impl Cache {
     }
 }
 
-/// Walk all `*.rs` files under `manifest_dir` (excluding `target/`),
-/// returning the fingerprint plus the clamped sum of file bytes
-/// (matches `size::estimate` semantics for the LPT packer).
-pub(crate) fn build(manifest_dir: &Path, size_cap: u64) -> (Fingerprint, u64) {
-    let mut fp = BTreeMap::new();
+/// A crate's freshly-walked state: the per-file mtime [`Fingerprint`] plus the
+/// `*.rs` byte total used as the work-size proxy.
+pub(crate) struct Build {
+    pub fingerprint: Fingerprint,
+    pub size_bytes: u64,
+}
+
+/// Walk all `*.rs` files under `manifest_dir` (excluding `target/`), returning
+/// the per-file mtime fingerprint plus the byte total clamped to
+/// [`size::HUGE_CUTOFF_BYTES`]. Reading the cutoff here (rather than taking it
+/// as a parameter) keeps the cached and uncached size proxies — `cache::build`
+/// and `size::estimate` — clamped to the *same* value, which is what makes the
+/// coalescer's `>= solo_threshold` comparison exact for both paths.
+pub(crate) fn build(manifest_dir: &Path) -> Build {
+    let mut fingerprint = BTreeMap::new();
     let mut total: u64 = 0;
     let walker = walkdir::WalkDir::new(manifest_dir)
         .follow_links(false)
@@ -112,7 +123,7 @@ pub(crate) fn build(manifest_dir: &Path, size_cap: u64) -> (Fingerprint, u64) {
         if !entry.file_type().is_file() {
             continue;
         }
-        if entry.path().extension().map(|x| x != "rs").unwrap_or(true) {
+        if entry.path().extension().is_none_or(|x| x != "rs") {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -120,10 +131,13 @@ pub(crate) fn build(manifest_dir: &Path, size_cap: u64) -> (Fingerprint, u64) {
         if let Ok(mt) = meta.modified()
             && let Ok(d) = mt.duration_since(UNIX_EPOCH)
         {
-            fp.insert(entry.path().to_path_buf(), d.as_nanos());
+            fingerprint.insert(entry.path().to_path_buf(), d.as_nanos());
         }
     }
-    (fp, total.min(size_cap))
+    Build {
+        fingerprint,
+        size_bytes: total.min(size::HUGE_CUTOFF_BYTES),
+    }
 }
 
 fn read_entries(path: &Path, expected: u64) -> io::Result<HashMap<PathBuf, Fingerprint>> {
@@ -173,14 +187,14 @@ fn cache_path() -> Option<PathBuf> {
 fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
     let mut h = seed;
     for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
 }
 
 fn compute_tool_hash(workspace_root: &Path) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     if let Ok(out) = Command::new("rustfmt").arg("--version").output() {
         h = fnv1a(h, &out.stdout);
     }
@@ -193,4 +207,68 @@ fn compute_tool_hash(workspace_root: &Path) -> u64 {
         }
     }
     h
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests assert by panicking; `unwrap` is the idiomatic way to fail loudly.
+    #![allow(clippy::unwrap_used)]
+
+    use super::{Build, Cache, Fingerprint, build, read_entries};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn unique_tmp(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn build_fingerprints_only_rs_files_and_sums_their_bytes() {
+        let dir = unique_tmp("ff-cache-build");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), b"fn a() {}\n").unwrap(); // 10 bytes
+        std::fs::write(dir.join("b.rs"), b"fn b() {}\n").unwrap(); // 10 bytes
+        std::fs::write(dir.join("README.md"), b"ignored").unwrap();
+
+        let Build {
+            fingerprint,
+            size_bytes,
+        } = build(&dir);
+        assert_eq!(fingerprint.len(), 2, "only the two .rs files are fingerprinted");
+        assert_eq!(size_bytes, 20, "size proxy sums the .rs bytes, not the .md file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_then_load_roundtrips_and_salt_guards_against_tool_changes() {
+        let dir = unique_tmp("ff-cache-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tsv = dir.join("fingerprints.tsv");
+
+        let manifest = PathBuf::from("/ws/crate-a");
+        let mut fingerprint = Fingerprint::new();
+        fingerprint.insert(PathBuf::from("/ws/crate-a/src/lib.rs"), 42u128);
+
+        let mut cache = Cache {
+            path: Some(tsv.clone()),
+            tool_hash: 0xdead_beef,
+            retained: HashMap::new(),
+            pending: HashMap::new(),
+        };
+        cache.stage(manifest.clone(), fingerprint.clone());
+        cache.commit_and_save().unwrap();
+
+        // Same tool hash → the staged entry comes back byte-identical.
+        let loaded = read_entries(&tsv, 0xdead_beef).unwrap();
+        assert_eq!(loaded.get(&manifest), Some(&fingerprint));
+
+        // Different tool hash (e.g. rustfmt upgraded) → salt mismatch wipes it.
+        let stale = read_entries(&tsv, 0x0bad_f00d).unwrap();
+        assert!(stale.is_empty(), "a tool-hash mismatch must invalidate the cache");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
